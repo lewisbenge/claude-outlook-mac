@@ -73,13 +73,3 @@ def test_apply_disabled_safety(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS"])
     assert mainmod.main() == 0
     assert moved["called"] is True
-
-
-def test_str_to_bool_variants():
-    assert mainmod.str_to_bool("true") is True
-    assert mainmod.str_to_bool("false") is False
-    assert mainmod.str_to_bool("1") is True
-    assert mainmod.str_to_bool("0") is False
-    assert mainmod.str_to_bool(True) is True
-    assert mainmod.str_to_bool(False) is False
-    assert mainmod.str_to_bool(None) is False

@@ -14,27 +14,15 @@ except ModuleNotFoundError:
 from src.bedrock_classifier import BedrockClassifier
 from src.cache import ProcessedCache
 from src.folder_rules import FolderRuleConfig, choose_target_folder
-from src.outlook_client import OutlookClient
+from src.outlook_client import OutlookClient, OutlookSafetyError
 from src.reporting import DecisionLog, write_csv_report, write_json_report
-
-
-def str_to_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Local-first Outlook inbox triage tool")
-    p.add_argument("--limit", type=int, default=25)
+    p.add_argument("--limit", type=int, default=50)
     p.add_argument("--dry-run", action="store_true", default=True)
     p.add_argument("--apply", action="store_true")
-    p.add_argument("--confirm-apply", type=str, default="")
-    p.add_argument("--since-days", type=int, default=-1)
-    p.add_argument("--unread-only", action="store_true")
-    p.add_argument("--include-direct-to-me", choices=["true", "false"], default=os.getenv("INCLUDE_DIRECT_TO_ME", "false"))
     p.add_argument("--no-body-preview", action="store_true")
     p.add_argument("--max-body-preview-chars", type=int, default=500)
     p.add_argument("--interactive-review", action="store_true")
@@ -43,11 +31,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def run_preflight(client: OutlookClient) -> None:
+def run_preflight(client: OutlookClient, classifier: BedrockClassifier) -> None:
     client.preflight_permission_check()
-    aws_region = os.getenv("AWS_REGION")
-    model_id = os.getenv("BEDROCK_MODEL_ID")
-    if not aws_region or not model_id:
+    if not os.getenv("AWS_REGION") or not os.getenv("BEDROCK_MODEL_ID"):
         raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID")
     if not (os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE") or os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")):
         raise RuntimeError("AWS credentials are not configured")
@@ -55,7 +41,6 @@ def run_preflight(client: OutlookClient) -> None:
     testfile = Path("reports/.write_test")
     testfile.write_text("ok", encoding="utf-8")
     testfile.unlink(missing_ok=True)
-    classifier = BedrockClassifier(aws_region, model_id)
     classifier.preflight_check()
 
 
@@ -78,16 +63,11 @@ def main() -> int:
         raise RuntimeError('For --apply you must pass --confirm-apply "MOVE_EMAILS" exactly.')
 
     client = OutlookClient(Path("scripts"))
-    try:
-        run_preflight(client)
-    except Exception as exc:
-        print(f"Preflight failed: {exc}")
-        return 1
+    classifier = BedrockClassifier(os.environ["AWS_REGION"], os.environ["BEDROCK_MODEL_ID"])
+    run_preflight(client, classifier)
     if args.preflight_only:
         print("Preflight OK")
         return 0
-
-    classifier = BedrockClassifier(os.environ["AWS_REGION"], os.environ["BEDROCK_MODEL_ID"])
 
     client.ensure_outlook_running()
     cache = ProcessedCache(Path(".cache/processed_messages.json"))
