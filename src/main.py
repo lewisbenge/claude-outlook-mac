@@ -20,7 +20,7 @@ from src.reporting import DecisionLog, write_csv_report, write_json_report
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Local-first Outlook inbox triage tool")
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--limit", type=int, default=25)
     p.add_argument("--dry-run", action="store_true", default=True)
     p.add_argument("--apply", action="store_true")
     p.add_argument("--no-body-preview", action="store_true")
@@ -28,7 +28,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interactive-review", action="store_true")
     p.add_argument("--reset-cache", action="store_true")
     p.add_argument("--preflight-only", action="store_true")
+    p.add_argument("--confirm-apply", default="")
+    p.add_argument("--since-days", type=int, default=30)
+    p.add_argument("--unread-only", action="store_true")
+    p.add_argument("--include-direct-to-me", default="false")
     return p
+
+
+def str_to_bool(value: str | bool | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
 
 
 def run_preflight(client: OutlookClient, classifier: BedrockClassifier) -> None:
