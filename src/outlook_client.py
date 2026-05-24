@@ -34,11 +34,16 @@ class OutlookClient:
             raise RuntimeError(exc.stderr.strip() or f"Failed script: {script_name}") from exc
         return result.stdout.strip()
 
+    def preflight_permission_check(self) -> None:
+        self._run_script("outlook_ensure_running.applescript")
+
     def ensure_outlook_running(self) -> None:
         self._run_script("outlook_ensure_running.applescript")
 
-    def list_inbox_messages(self, limit: int = 50, max_body_preview_chars: int = 500) -> list[OutlookMessage]:
-        output = self._run_script("outlook_list_messages.applescript", str(limit), str(max_body_preview_chars))
+    def list_inbox_messages(self, limit: int = 25, max_body_preview_chars: int = 500, since_days: int = -1, unread_only: bool = False) -> list[OutlookMessage]:
+        output = self._run_script(
+            "outlook_list_messages.applescript", str(limit), str(max_body_preview_chars), str(since_days), "true" if unread_only else "false"
+        )
         raw = json.loads(output or "[]")
         return [OutlookMessage(**msg) for msg in raw]
 

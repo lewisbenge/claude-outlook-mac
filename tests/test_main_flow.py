@@ -5,7 +5,7 @@ import src.main as mainmod
 
 def test_parser_defaults():
     args = mainmod.build_parser().parse_args([])
-    assert args.limit == 50
+    assert args.limit == 25
     assert args.max_body_preview_chars == 500
 
 
@@ -35,6 +35,7 @@ def test_low_confidence_forces_review(monkeypatch, tmp_path):
     monkeypatch.setattr(mainmod, "OutlookClient", lambda *_: C())
     monkeypatch.setattr(mainmod, "BedrockClassifier", lambda *_: B())
     monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
     monkeypatch.setattr("sys.argv", ["prog", "--dry-run"])
     assert mainmod.main() == 0
 
@@ -68,6 +69,7 @@ def test_apply_disabled_safety(monkeypatch, tmp_path):
     monkeypatch.setattr(mainmod, "OutlookClient", lambda *_: C())
     monkeypatch.setattr(mainmod, "BedrockClassifier", lambda *_: B())
     monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
-    monkeypatch.setattr("sys.argv", ["prog", "--apply"])
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS"])
     assert mainmod.main() == 0
     assert moved["called"] is True
