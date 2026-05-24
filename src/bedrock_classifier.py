@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 
 
+
 @dataclass
 class Classification:
     category: str
@@ -21,16 +22,6 @@ class BedrockClassifier:
             raise RuntimeError("boto3 is required for Bedrock classification") from exc
         self.client = boto3.client("bedrock-runtime", region_name=region)
         self.model_id = model_id
-
-    def preflight_check(self) -> None:
-        body = json.dumps(
-            {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 8,
-                "messages": [{"role": "user", "content": "Reply with JSON: {\"ok\":true}"}],
-            }
-        )
-        self.client.invoke_model(modelId=self.model_id, body=body)
 
     def classify(self, message: dict) -> Classification:
         prompt = (

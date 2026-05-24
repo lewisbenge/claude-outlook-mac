@@ -14,23 +14,15 @@ except ModuleNotFoundError:
 from src.bedrock_classifier import BedrockClassifier
 from src.cache import ProcessedCache
 from src.folder_rules import FolderRuleConfig, choose_target_folder
-from src.outlook_client import OutlookClient
+from src.outlook_client import OutlookClient, OutlookSafetyError
 from src.reporting import DecisionLog, write_csv_report, write_json_report
-
-
-def str_to_bool(value: str) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Local-first Outlook inbox triage tool")
-    p.add_argument("--limit", type=int, default=25)
+    p.add_argument("--limit", type=int, default=50)
     p.add_argument("--dry-run", action="store_true", default=True)
     p.add_argument("--apply", action="store_true")
-    p.add_argument("--confirm-apply", type=str, default="")
-    p.add_argument("--since-days", type=int, default=-1)
-    p.add_argument("--unread-only", action="store_true")
-    p.add_argument("--include-direct-to-me", choices=["true", "false"], default=os.getenv("INCLUDE_DIRECT_TO_ME", "false"))
     p.add_argument("--no-body-preview", action="store_true")
     p.add_argument("--max-body-preview-chars", type=int, default=500)
     p.add_argument("--interactive-review", action="store_true")
