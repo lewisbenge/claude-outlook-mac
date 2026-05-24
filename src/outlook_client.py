@@ -28,22 +28,16 @@ class OutlookClient:
 
     def _run_script(self, script_name: str, *args: str) -> str:
         script_path = self.scripts_dir / script_name
-        try:
-            result = subprocess.run(["osascript", str(script_path), *args], capture_output=True, text=True, check=True)
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(exc.stderr.strip() or f"Failed script: {script_name}") from exc
+        result = subprocess.run(
+            ["osascript", str(script_path), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         return result.stdout.strip()
 
-    def preflight_permission_check(self) -> None:
-        self._run_script("outlook_ensure_running.applescript")
-
-    def ensure_outlook_running(self) -> None:
-        self._run_script("outlook_ensure_running.applescript")
-
-    def list_inbox_messages(self, limit: int = 25, max_body_preview_chars: int = 500, since_days: int = -1, unread_only: bool = False) -> list[OutlookMessage]:
-        output = self._run_script(
-            "outlook_list_messages.applescript", str(limit), str(max_body_preview_chars), str(since_days), "true" if unread_only else "false"
-        )
+    def list_inbox_messages(self, limit: int = 50) -> list[OutlookMessage]:
+        output = self._run_script("outlook_list_messages.applescript", str(limit))
         raw = json.loads(output or "[]")
         return [OutlookMessage(**msg) for msg in raw]
 
