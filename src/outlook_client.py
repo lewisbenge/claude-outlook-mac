@@ -36,8 +36,29 @@ class OutlookClient:
         )
         return result.stdout.strip()
 
-    def list_inbox_messages(self, limit: int = 50) -> list[OutlookMessage]:
-        output = self._run_script("outlook_list_messages.applescript", str(limit))
+    def ensure_outlook_running(self) -> None:
+        self._run_script("outlook_ensure_running.applescript")
+
+    def preflight_permission_check(self) -> None:
+        self.ensure_outlook_running()
+        try:
+            self._run_script("outlook_list_folders.applescript")
+            self.list_folders()
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or str(exc)).strip()
+            raise RuntimeError(
+                "Outlook preflight failed: AppleScript automation access is denied "
+                "or Outlook folder access is unavailable. Grant automation permissions "
+                "for this terminal/Python process in System Settings > Privacy & Security > Automation, then retry. "
+                f"Original error: {detail}"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"Outlook preflight failed while validating folder access: {exc}"
+            ) from exc
+
+    def list_inbox_messages(self, limit: int = 50, max_body_preview_chars: int = 500, **_: object) -> list[OutlookMessage]:
+        output = self._run_script("outlook_list_messages.applescript", str(limit), str(max_body_preview_chars))
         raw = json.loads(output or "[]")
         return [OutlookMessage(**msg) for msg in raw]
 
