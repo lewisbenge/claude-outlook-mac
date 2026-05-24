@@ -75,8 +75,13 @@ def main() -> int:
     if args.apply and args.confirm_apply != "MOVE_EMAILS":
         raise RuntimeError('For --apply you must pass --confirm-apply "MOVE_EMAILS" exactly.')
 
+    region = os.getenv("AWS_REGION")
+    model_id = os.getenv("BEDROCK_MODEL_ID")
+    if not region or not model_id:
+        raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID")
+
     client = OutlookClient(Path("scripts"))
-    classifier = BedrockClassifier(os.environ["AWS_REGION"], os.environ["BEDROCK_MODEL_ID"])
+    classifier = BedrockClassifier(region, model_id)
     run_preflight(client, classifier)
     if args.preflight_only:
         print("Preflight OK")
@@ -165,4 +170,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"ERROR: {exc}")
+        raise SystemExit(1)
