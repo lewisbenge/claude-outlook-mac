@@ -6,21 +6,27 @@ from dataclasses import dataclass
 
 @dataclass
 class FolderRuleConfig:
-    delete_folder_name: str = "Delete"
+    root_folder_name: str = "AI Sorted"
+    delete_folder_leaf: str = "Delete"
     max_folder_name_length: int = 64
 
 
 def sanitize_folder_name(raw_name: str, max_length: int = 64) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9 _\-]", "", raw_name).strip()
+    cleaned = raw_name.replace("/", "-").replace("\\", "-").replace('"', "")
+    cleaned = re.sub(r"[^A-Za-z0-9 _\-]", "", cleaned).strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
     if not cleaned:
         return "Needs Review"
     return cleaned[:max_length]
 
 
+def _ai_path(cfg: FolderRuleConfig, leaf: str) -> str:
+    return f"{cfg.root_folder_name}/{sanitize_folder_name(leaf, cfg.max_folder_name_length)}"
+
+
 def choose_target_folder(category: str, suggested_folder: str | None, config: FolderRuleConfig) -> str:
     if category == "MOVE_TO_DELETE_FOLDER":
-        return config.delete_folder_name
+        return _ai_path(config, config.delete_folder_leaf)
     if category == "MOVE_TO_PROJECT_FOLDER":
-        return sanitize_folder_name(suggested_folder or "Needs Review", config.max_folder_name_length)
+        return _ai_path(config, suggested_folder or "Needs Review")
     return "Inbox"
