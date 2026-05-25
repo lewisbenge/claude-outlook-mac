@@ -17,7 +17,14 @@ from src.cache import ProcessedCache
 from src.folder_rules import FolderRuleConfig, choose_target_folder
 from src.outlook_client import OutlookClient
 from src.reporting import DecisionLog, write_csv_report, write_json_report
-from src.triage_engine import ClassificationCache, Metrics, classify_batch, heuristic_classify
+from src.triage_engine import (
+    ClassificationCache,
+    Metrics,
+    OperationalMetadataStore,
+    classify_batch,
+    enrich_deterministic_meta,
+    heuristic_classify,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -97,6 +104,7 @@ def main() -> int:
     client.ensure_outlook_running()
     cache = ProcessedCache(Path(".cache/processed_messages.json"))
     class_cache = ClassificationCache(Path(".cache/classification_cache.sqlite"))
+    metadata_store = OperationalMetadataStore(Path(".cache/classification_cache.sqlite"))
     metrics = Metrics()
     if args.reset_cache:
         cache.reset()
@@ -126,6 +134,7 @@ def main() -> int:
             outcome_counts["skipped"] += 1
             continue
         meta = {"subject": m.subject, "sender": m.sender, "recipients": m.recipients, "cc": m.cc, "received_at": m.received_at, "folder": m.folder, "body_preview": "" if args.no_body_preview else m.body_preview[:args.max_body_preview_chars]}
+        meta = enrich_deterministic_meta(meta)
         h = heuristic_classify(meta, invite_mode)
         if h:
             metrics.c["heuristic_hits"] += 1
@@ -137,6 +146,7 @@ def main() -> int:
             result = h.classification
             target = choose_target_folder(result.category, result.target_folder, folder_cfg)
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+            metadata_store.store(m.message_id, meta, result)
             cache.add(m.message_id)
             outcome_counts["skipped"] += 1
             continue
@@ -146,6 +156,7 @@ def main() -> int:
             dlog(f"message_id={m.message_id} lifecycle=cache_classification category={cached.category} confidence={cached.confidence}")
             target = choose_target_folder(cached.category, cached.target_folder, folder_cfg)
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, cached.category, cached.confidence, target, "classification cache", False, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+            metadata_store.store(m.message_id, meta, cached)
             cache.add(m.message_id)
             outcome_counts["skipped"] += 1
             continue
@@ -156,6 +167,7 @@ def main() -> int:
 
     classified = classify_batch(classifier, to_classify, workers=workers, batch_size=batch_size, metrics=metrics)
     for m, result in zip(pending_messages, classified):
+        meta = enrich_deterministic_meta({"subject": m.subject, "sender": m.sender, "recipients": m.recipients, "cc": m.cc, "received_at": m.received_at, "folder": m.folder, "body_preview": "" if args.no_body_preview else m.body_preview[:args.max_body_preview_chars]})
         target = choose_target_folder(result.category, result.target_folder, folder_cfg)
         if result.confidence < confidence_threshold:
             result.category, target = "NEEDS_REVIEW", "Inbox"
@@ -166,6 +178,13 @@ def main() -> int:
         else:
             outcome_counts["classified"] += 1
         decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+        metadata_store.store(m.message_id, meta, result)
+        if result.project:
+            metrics.c["extracted_projects"] += 1
+        if result.action_required:
+            metrics.c["extracted_actions"] += 1
+        if result.priority:
+            metrics.c["inferred_priorities"] += 1
         cache.add(m.message_id)
 
     for d in decisions:

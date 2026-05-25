@@ -1,4 +1,4 @@
-from src.triage_engine import ClassificationCache, Metrics, classify_batch, heuristic_classify
+from src.triage_engine import ClassificationCache, Metrics, classify_batch, enrich_deterministic_meta, heuristic_classify
 from src.claude_cli_classifier import Classification
 
 
@@ -52,3 +52,10 @@ def test_classify_batch_preserves_order_merge():
     metas = [{"subject": "first"}, {"subject": "second"}, {"subject": "third"}]
     out = classify_batch(C(), metas, workers=3, batch_size=2, metrics=metrics)
     assert [x.reason for x in out] == ["first", "second", "third"]
+
+
+def test_enrich_deterministic_meta_extracts_operational_fields():
+    out = enrich_deterministic_meta({"subject": "Re: Weekly Jira digest", "sender": "bot@example.com", "body_preview": "Jira issue changed"})
+    assert out["sender_domain"] == "example.com"
+    assert out["recurring_thread"] is True
+    assert out["source_system"] == "jira"

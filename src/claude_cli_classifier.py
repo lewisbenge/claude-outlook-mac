@@ -16,6 +16,16 @@ class Classification:
     confidence: float
     reason: str
     needs_user_attention: bool
+    project: str | None = None
+    organization: str | None = None
+    stakeholders: list[str] | None = None
+    action_required: bool | None = None
+    priority: str | None = None
+    topics: list[str] | None = None
+    meeting_related: bool | None = None
+    contains_decision: bool | None = None
+    contains_tasking: bool | None = None
+    short_summary: str | None = None
 
 
 class ClaudeCliClassifier:
@@ -42,9 +52,9 @@ class ClaudeCliClassifier:
 
     def classify(self, message: dict) -> Classification:
         prompt = (
-            "Classify the email metadata into one category: KEEP_IN_INBOX, "
+            "Metadata-first: classify email metadata into one category: KEEP_IN_INBOX, "
             "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW. "
-            "Return ONLY valid JSON with keys: category,target_folder,confidence,reason,needs_user_attention. "
+            "Return ONLY valid JSON with keys: category,target_folder,confidence,reason,needs_user_attention,project,organization,stakeholders,action_required,priority,topics,meeting_related,contains_decision,contains_tasking,short_summary. "
             "Do not include markdown. Do not include explanation text. "
             f"Email: {json.dumps(message)}"
         )
@@ -70,9 +80,9 @@ class ClaudeCliClassifier:
         if len(messages) <= 1:
             return [self.classify(m) for m in messages]
         prompt = (
-            "Classify each email metadata item into one category: KEEP_IN_INBOX, "
+            "Metadata-first: classify each email metadata item into one category: KEEP_IN_INBOX, "
             "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW, CALENDAR_INVITE. "
-            "Return ONLY valid JSON array; every item must include keys: category,target_folder,confidence,reason,needs_user_attention. "
+            "Return ONLY valid JSON array; every item must include keys: category,target_folder,confidence,reason,needs_user_attention,project,organization,stakeholders,action_required,priority,topics,meeting_related,contains_decision,contains_tasking,short_summary. "
             f"Emails: {json.dumps(messages)}"
         )
         try:
