@@ -70,6 +70,11 @@ def main() -> int:
     workers = int(os.getenv("CLAUDE_WORKERS", "4"))
     batch_size = int(os.getenv("CLAUDE_BATCH_SIZE", "4"))
     my_email = os.getenv("USER_EMAIL", "")
+    debug_pipeline = str_to_bool(os.getenv("DEBUG_PIPELINE", "false"))
+
+    def dlog(msg: str) -> None:
+        if debug_pipeline:
+            print(f"[DEBUG_PIPELINE] {msg}")
     if args.apply and args.confirm_apply != "MOVE_EMAILS":
         raise RuntimeError('For --apply you must pass --confirm-apply "MOVE_EMAILS" exactly.')
 
@@ -96,6 +101,7 @@ def main() -> int:
     if args.reset_cache:
         cache.reset()
     messages = client.list_inbox_messages(limit=args.limit, max_body_preview_chars=args.max_body_preview_chars, since_days=args.since_days, unread_only=args.unread_only)
+    metrics.c["inbox_messages_retrieved"] = len(messages)
 
     decisions: list[DecisionLog] = []
     summary = {"kept_in_inbox": 0, "moved_project": 0, "moved_delete": 0, "needs_review": 0, "failed": 0}
@@ -104,43 +110,61 @@ def main() -> int:
 
     to_classify = []
     pending_messages = []
+    outcome_counts = {"skipped": 0, "classified": 0, "failed": 0}
     for m in messages:
+        dlog(f"message_id={m.message_id} lifecycle=retrieved")
         if cache.contains(m.message_id):
+            metrics.c["skipped_cached_processed"] += 1
+            dlog(f"message_id={m.message_id} lifecycle=skipped reason=already_processed_cache")
+            outcome_counts["skipped"] += 1
             continue
         if not include_direct_to_me and _is_direct_to_me(m, my_email):
             metrics.c["skipped_direct_to_me"] += 1
+            dlog(f"message_id={m.message_id} lifecycle=skipped reason=direct_to_me include_direct_to_me={include_direct_to_me}")
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "KEEP_IN_INBOX", 1.0, "Inbox", "Directly addressed", True, "KEEP"))
             cache.add(m.message_id)
+            outcome_counts["skipped"] += 1
             continue
         meta = {"subject": m.subject, "sender": m.sender, "recipients": m.recipients, "cc": m.cc, "received_at": m.received_at, "folder": m.folder, "body_preview": "" if args.no_body_preview else m.body_preview[:args.max_body_preview_chars]}
         h = heuristic_classify(meta, invite_mode)
         if h:
             metrics.c["heuristic_hits"] += 1
+            dlog(f"message_id={m.message_id} lifecycle=heuristic_classification category={h.classification.category}")
             if h.classification.category == "CALENDAR_INVITE":
-                metrics.c["invite_handling_count"] += 1
+                metrics.c["invite_hits"] += 1
                 if invite_mode == "tentative":
                     client.try_mark_tentative(m.message_id)
             result = h.classification
             target = choose_target_folder(result.category, result.target_folder, folder_cfg)
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             cache.add(m.message_id)
+            outcome_counts["skipped"] += 1
             continue
         cached = class_cache.lookup(m.sender, m.subject)
         if cached and cached.confidence >= confidence_threshold:
             metrics.c["cache_hits"] += 1
+            dlog(f"message_id={m.message_id} lifecycle=cache_classification category={cached.category} confidence={cached.confidence}")
             target = choose_target_folder(cached.category, cached.target_folder, folder_cfg)
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, cached.category, cached.confidence, target, "classification cache", False, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             cache.add(m.message_id)
+            outcome_counts["skipped"] += 1
             continue
         to_classify.append(meta)
         pending_messages.append(m)
+        metrics.c["queued_for_claude"] += 1
+        dlog(f"message_id={m.message_id} lifecycle=queued_for_claude")
 
     classified = classify_batch(classifier, to_classify, workers=workers, batch_size=batch_size, metrics=metrics)
     for m, result in zip(pending_messages, classified):
         target = choose_target_folder(result.category, result.target_folder, folder_cfg)
         if result.confidence < confidence_threshold:
             result.category, target = "NEEDS_REVIEW", "Inbox"
+        dlog(f"message_id={m.message_id} lifecycle=final_classification category={result.category} confidence={result.confidence}")
         class_cache.store(m.sender, m.subject, result)
+        if result.category == "FAILED":
+            outcome_counts["failed"] += 1
+        else:
+            outcome_counts["classified"] += 1
         decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
         cache.add(m.message_id)
 
@@ -168,6 +192,17 @@ def main() -> int:
     write_csv_report(decisions, reports_dir / "dry_run_report.csv")
     shutil.copyfile(reports_dir / "dry_run_report.json", reports_dir / "latest.json")
     shutil.copyfile(reports_dir / "dry_run_report.csv", reports_dir / "latest.csv")
+    metrics.c["final_report_entries"] = len(decisions)
+    outcome_skipped = outcome_counts["skipped"]
+    outcome_classified = outcome_counts["classified"]
+    outcome_failed = outcome_counts["failed"]
+    outcome_total = outcome_skipped + outcome_classified + outcome_failed
+    if outcome_total != metrics.c["inbox_messages_retrieved"]:
+        raise RuntimeError(
+            "Invariant violated: inbox_count != skipped + classified + failed "
+            f"({metrics.c['inbox_messages_retrieved']} != {outcome_skipped} + {outcome_classified} + {outcome_failed})"
+        )
+
     print(f"Summary: {summary}")
     print(f"Metrics: {metrics.as_dict()}")
     return 0
