@@ -18,7 +18,7 @@ class Classification:
 
 
 class BedrockClassifier:
-    def __init__(self, region: str, model_id: str, debug_json: bool = False) -> None:
+    def __init__(self, region: str, model_id: str, inference_profile_arn: str | None = None, debug_json: bool = False) -> None:
         try:
             import boto3
         except ModuleNotFoundError as exc:
@@ -28,6 +28,7 @@ class BedrockClassifier:
         self._validate_session_credentials()
         self.client = self.session.client("bedrock-runtime")
         self.model_id = model_id
+        self.inference_profile_arn = inference_profile_arn
         self.profile_name = profile_name
         self.region = self.session.region_name or region
         self.debug_json = debug_json
@@ -49,8 +50,32 @@ class BedrockClassifier:
             "AWS preflight: "
             f"profile={active_profile}, "
             f"region={active_region}, "
+            f"active_model_id={self.model_id}, "
+            f"active_inference_profile={self.inference_profile_arn or '(none)'}, "
             "credentials_resolved=true"
         )
+        self._validate_bedrock_invocation_mode()
+
+    def _active_bedrock_target(self) -> str:
+        return self.inference_profile_arn or self.model_id
+
+    def _validate_bedrock_invocation_mode(self) -> None:
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "Respond with JSON: {\"ok\": true}"}],
+        })
+        try:
+            self.client.invoke_model(modelId=self._active_bedrock_target(), body=body)
+        except Exception as exc:
+            msg = str(exc)
+            if self.inference_profile_arn is None and ("on-demand" in msg.lower() or "inference profile" in msg.lower()):
+                raise RuntimeError(
+                    "Bedrock model invocation failed because this model does not support direct on-demand invocation. "
+                    "Set BEDROCK_INFERENCE_PROFILE_ARN to an ARN that routes to the desired model, or switch BEDROCK_MODEL_ID "
+                    "to a model that supports on-demand invocation in your region."
+                ) from exc
+            raise
 
     def classify(self, message: dict) -> Classification:
         prompt = (
@@ -65,7 +90,7 @@ class BedrockClassifier:
             "max_tokens": 300,
             "messages": [{"role": "user", "content": prompt}],
         })
-        resp = self.client.invoke_model(modelId=self.model_id, body=body)
+        resp = self.client.invoke_model(modelId=self._active_bedrock_target(), body=body)
         payload = safe_json_loads(
             resp["body"].read(),
             context="bedrock.response",

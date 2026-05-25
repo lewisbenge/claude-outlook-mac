@@ -43,6 +43,30 @@ Enterprise constraints can block app registration/token issuance. This project a
 2. In **System Settings → Privacy & Security → Automation**, allow Terminal/iTerm (or your runner) to control Microsoft Outlook.
 3. If blocked, remove permissions and rerun to re-prompt.
 
+
+## Bedrock model configuration
+
+Use `BEDROCK_MODEL_ID` for direct on-demand model invocation:
+
+```bash
+export AWS_REGION=us-east-1
+export BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
+python -m src.main --dry-run
+```
+
+If your Claude model must be invoked via an inference profile, set `BEDROCK_INFERENCE_PROFILE_ARN`.
+When this value is set, the tool invokes Bedrock with the profile ARN instead of direct model ID:
+
+```bash
+export AWS_REGION=us-east-1
+export BEDROCK_MODEL_ID=anthropic.claude-3-7-sonnet-20250219-v1:0
+export BEDROCK_INFERENCE_PROFILE_ARN=arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+python -m src.main --dry-run
+```
+
+Preflight now validates invocation mode and prints active Bedrock target settings.
+If on-demand invocation is unsupported, it explains how to switch to an inference profile ARN.
+
 ## Run
 
 Dry-run (recommended):

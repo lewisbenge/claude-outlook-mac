@@ -69,6 +69,7 @@ def _classifier_for_text(text):
     c = BedrockClassifier.__new__(BedrockClassifier)
     c.client = _FakeClient(text)
     c.model_id = 'model'
+    c.inference_profile_arn = None
     return c
 
 
@@ -92,3 +93,35 @@ def test_classify_invalid_json_falls_back_to_needs_review():
     res = c.classify({"subject": "test"})
     assert res.category == 'NEEDS_REVIEW'
     assert res.needs_user_attention is True
+
+
+def test_uses_inference_profile_for_invocation():
+    calls = {}
+
+    class _Client:
+        def invoke_model(self, **kwargs):
+            calls.update(kwargs)
+            payload = {"content": [{"text": '{"category":"KEEP_IN_INBOX","target_folder":"Inbox","confidence":1.0,"reason":"ok","needs_user_attention":false}'}]}
+            return {"body": _Body(__import__('json').dumps(payload))}
+
+    c = BedrockClassifier.__new__(BedrockClassifier)
+    c.client = _Client()
+    c.model_id = 'model'
+    c.inference_profile_arn = 'arn:aws:bedrock:us-east-1:123:inference-profile/x'
+    c.classify({"subject": "test"})
+    assert calls["modelId"] == c.inference_profile_arn
+
+
+def test_preflight_explains_inference_profile_for_unsupported_ondemand():
+    class _Client:
+        def invoke_model(self, **_kwargs):
+            raise Exception("ValidationException: Invocation of model ID with on-demand throughput isn't supported")
+
+    c = BedrockClassifier.__new__(BedrockClassifier)
+    c.client = _Client()
+    c.model_id = 'model'
+    c.inference_profile_arn = None
+    c.session = _FakeSession(profile_name='p', region_name='us-east-1')
+    c.region = 'us-east-1'
+    with pytest.raises(RuntimeError, match='BEDROCK_INFERENCE_PROFILE_ARN'):
+        c.preflight_check()
