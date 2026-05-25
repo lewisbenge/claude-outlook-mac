@@ -59,6 +59,22 @@ def test_classify_markdown_fenced_response(monkeypatch):
     assert res.category == 'MOVE_TO_DELETE_FOLDER'
 
 
+def test_classify_parses_escaped_newline_wrapped_json(monkeypatch):
+    payload = 'BEGIN_JSON\\n{\\n\\"category\\":\\"KEEP_IN_INBOX\\",\\"target_folder\\":\\"Inbox\\",\\"confidence\\":0.95,\\"reason\\":\\"ok\\",\\"needs_user_attention\\":false\\n}\\nEND_JSON'
+    monkeypatch.setattr(subprocess, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess(args=['claude'], returncode=0, stdout=payload, stderr=''))
+    c = ClaudeCliClassifier()
+    res = c.classify({'subject': 'x'})
+    assert res.category == 'KEEP_IN_INBOX'
+
+
+def test_classify_parses_escaped_quote_wrapped_json(monkeypatch):
+    payload = 'BEGIN_JSON\\n{\\"category\\":\\"KEEP_IN_INBOX\\",\\"target_folder\\":\\"Inbox\\",\\"confidence\\":0.9,\\"reason\\":\\"quote: \\\\\\"ok\\\\\\"\\" ,\\"needs_user_attention\\":false}\\nEND_JSON'
+    monkeypatch.setattr(subprocess, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess(args=['claude'], returncode=0, stdout=payload, stderr=''))
+    c = ClaudeCliClassifier()
+    res = c.classify({'subject': 'x'})
+    assert res.category == 'KEEP_IN_INBOX'
+
+
 def test_classify_prose_response_fallback(monkeypatch):
     payload = "This should probably be NEEDS_REVIEW due to ambiguity."
     monkeypatch.setattr(subprocess, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess(args=['claude'], returncode=0, stdout=payload, stderr=''))

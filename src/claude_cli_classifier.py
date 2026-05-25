@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import time
+import codecs
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,14 +74,19 @@ class ClaudeCliClassifier:
             extracted = self._extract_wrapped_json(text) or self._extract_first_json_object(text)
             sanitized = sanitize_control_chars(extracted)
             data = safe_json_loads(sanitized, context="claude_cli.extracted_json", default={}, debug_json=self.debug_json)
+            if not isinstance(data, dict) or "category" not in data:
+                raise ValueError("Claude response JSON did not parse into expected object")
             data.setdefault("parse_error", None)
             data.setdefault("raw_response_preview", text[:500])
             return Classification(**data)
         except Exception as exc:
             self.last_error = str(exc)
             raw = locals().get("text", "")
+            cleaned = locals().get("sanitized", "")
             preview = raw[:500]
             print(f"Claude CLI parsing error: {exc}; payload={truncate_payload(raw)}")
+            if cleaned:
+                self._write_parse_failure_debug(raw=raw, cleaned=cleaned, error=str(exc))
             reason = "Model response parsing failed"
             if "timed out" in str(exc).lower():
                 reason = f"Claude timeout: {exc}"
@@ -93,7 +99,7 @@ class ClaudeCliClassifier:
                 reason=reason,
                 needs_user_attention=True,
                 parse_error=str(exc),
-                raw_response_preview=preview,
+                raw_response_preview=(f"{preview}\nCLEANED_PREVIEW:{cleaned[:500]}" if cleaned else preview),
             )
 
 
@@ -160,7 +166,23 @@ class ClaudeCliClassifier:
         end = text.find(end_marker, start)
         if end < 0:
             return None
-        return text[start:end].strip()
+        return ClaudeCliClassifier._unescape_wrapped_payload(text[start:end].strip())
+
+    @staticmethod
+    def _unescape_wrapped_payload(payload: str) -> str:
+        if not payload:
+            return payload
+        try:
+            if "\\n" in payload or "\\r" in payload or "\\t" in payload or '\\"' in payload:
+                return codecs.decode(payload, "unicode_escape")
+        except Exception:
+            return (
+                payload.replace("\\n", "\n")
+                .replace("\\r", "\r")
+                .replace("\\t", "\t")
+                .replace('\\"', '"')
+            )
+        return payload
 
     @staticmethod
     def _has_obvious_classification_hints(text: str) -> bool:
@@ -184,5 +206,11 @@ class ClaudeCliClassifier:
         path = Path("debug") / f"claude_raw_{ts}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}\n", encoding="utf-8")
+
+    def _write_parse_failure_debug(self, *, raw: str, cleaned: str, error: str) -> None:
+        ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+        path = Path("debug") / f"claude_parse_failure_{ts}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"ERROR:\n{error}\n\nRAW:\n{raw}\n\nCLEANED:\n{cleaned}\n", encoding="utf-8")
 
     _extract_first_json_object = staticmethod(BedrockClassifier._extract_first_json_object)

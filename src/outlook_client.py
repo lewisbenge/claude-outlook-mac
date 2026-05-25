@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import logging
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,9 +49,18 @@ class OutlookClient:
             ["osascript", str(script_path), *args],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=True,
         )
-        return result.stdout.strip()
+        raw = result.stdout or ""
+        logging.debug("AppleScript raw output [%s]: %r", script_name, raw[:500])
+        return self._sanitize_applescript_output(raw).strip()
+
+    @staticmethod
+    def _sanitize_applescript_output(text: str) -> str:
+        cleaned = text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+        cleaned = re.sub(r"[\ud800-\udfff]", "", cleaned)
+        return cleaned
 
     def ensure_outlook_running(self) -> None:
         self._run_script("outlook_ensure_running.applescript")

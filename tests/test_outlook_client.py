@@ -42,3 +42,28 @@ def test_preflight_wraps_applescript_permission_errors(monkeypatch):
 
     with pytest.raises(RuntimeError, match="AppleScript automation access is denied"):
         client.preflight_permission_check()
+
+
+def test_run_script_uses_utf8_and_sanitizes_surrogates(monkeypatch):
+    client = OutlookClient(Path("scripts"))
+
+    captured = {}
+
+    def fake_run(*args, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args=["osascript"], returncode=0, stdout="Bad\ud83dText", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    out = client._run_script("outlook_list_folders.applescript")
+    assert captured["text"] is True
+    assert captured["encoding"] == "utf-8"
+    assert "\ud83d" not in out
+
+
+def test_list_inbox_messages_unicode_roundtrip(monkeypatch):
+    client = OutlookClient(Path("scripts"))
+    payload = '[{"message_id":"1","subject":"こんにちは","sender":"汤𠮷","recipients":"","cc":"","received_at":"now","folder":"Inbox","body_preview":"Привет"}]'
+    monkeypatch.setattr(client, "_run_script", lambda *_args: payload)
+    msgs = client.list_inbox_messages()
+    assert msgs[0].subject == "こんにちは"
+    assert msgs[0].sender == "汤𠮷"
