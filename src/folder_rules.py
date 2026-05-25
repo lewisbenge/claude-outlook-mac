@@ -29,4 +29,18 @@ def choose_target_folder(category: str, suggested_folder: str | None, config: Fo
         return _ai_path(config, config.delete_folder_leaf)
     if category == "MOVE_TO_PROJECT_FOLDER":
         return _ai_path(config, suggested_folder or "Needs Review")
+    if category == "MOVE_TO_CUSTOMER_FOLDER":
+        return _ai_path(config, f"Customer/{suggested_folder or 'Needs Review'}")
+    if category in {"MOVE_TO_TRAVEL_FOLDER", "TRAVEL"}:
+        return _ai_path(config, "Travel")
+    if category in {"MOVE_TO_CALENDAR_FOLDER", "CALENDAR_INVITE", "CALENDAR"}:
+        return _ai_path(config, "Calendar")
+    if category in {"MOVE_TO_FINANCE_FOLDER", "FINANCE"}:
+        return _ai_path(config, "Finance")
+    if category in {"MOVE_TO_NEWSLETTER_FOLDER", "NEWSLETTER"}:
+        return _ai_path(config, "Delete")
+    if category == "AUTOMATION":
+        return _ai_path(config, "Automation")
+    if category == "ADMIN":
+        return _ai_path(config, "Admin")
     return "Inbox"
