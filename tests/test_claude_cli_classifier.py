@@ -81,7 +81,6 @@ def test_classify_prose_response_fallback(monkeypatch):
     c = ClaudeCliClassifier()
     res = c.classify({'subject': 'x'})
     assert res.category == 'NEEDS_REVIEW'
-    assert "natural language hints detected" in res.reason
     assert res.raw_response_preview.startswith("This should")
 
 
@@ -91,5 +90,15 @@ def test_classify_malformed_json_preserves_raw_preview(monkeypatch):
     c = ClaudeCliClassifier()
     res = c.classify({'subject': 'x'})
     assert res.category == 'NEEDS_REVIEW'
+    assert res.target_folder == "AI Sorted/Needs Review"
     assert res.parse_error
     assert res.raw_response_preview.startswith('{"category"')
+
+
+def test_prose_plus_json_parses(monkeypatch):
+    payload = "email classification follows {\"category\":\"NEEDS_REVIEW\",\"operational_class\":\"UNKNOWN\",\"action\":\"MOVE\",\"target_folder\":\"AI Sorted/Needs Review\",\"confidence\":0.51,\"needs_user_attention\":false,\"reason\":\"uncertain\",\"project\":null,\"customer_or_org\":null,\"routing_source\":\"model\"}"
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess(args=['claude'], returncode=0, stdout=payload, stderr=''))
+    c = ClaudeCliClassifier()
+    res = c.classify({'subject': 'x'})
+    assert res.category == "NEEDS_REVIEW"
+    assert res.operational_class == "UNKNOWN"

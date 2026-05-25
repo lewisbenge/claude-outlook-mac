@@ -13,7 +13,7 @@ def test_heuristic_low_value():
 def test_invite_detection():
     out = heuristic_classify({"subject": "Team meeting invitation", "sender": "a@x.com", "body_preview": ""}, "tentative")
     assert out is not None
-    assert out.classification.category == "CALENDAR_INVITE"
+    assert out.classification.category == "MOVE_TO_CALENDAR_FOLDER"
 
 
 def test_sqlite_cache_roundtrip(tmp_path):
@@ -53,6 +53,12 @@ def test_salesforce_noise_still_deletes():
     out = heuristic_classify({"subject": "Salesforce notification", "sender": "bot@crm.com", "body_preview": "automated alert"}, "tentative")
     assert out is not None
     assert out.classification.category == "MOVE_TO_DELETE_FOLDER"
+
+
+def test_customer_related_routes_to_needs_review_folder():
+    out = heuristic_classify({"subject": "Capability planning notes", "sender": "person@vendor.com", "body_preview": "weekly update"}, "tentative")
+    assert out is not None
+    assert out.classification.target_folder == "AI Sorted/Needs Review"
 
 
 def test_classify_batch_worker_exception_handling():
@@ -134,7 +140,7 @@ def test_flight_reminder_routes_to_travel():
 def test_calendar_recurring_invite_routes_to_calendar():
     out = heuristic_classify({"subject": "Weekly calendar invite", "sender": "calendar@corp.com", "body_preview": "Teams meeting"}, "tentative")
     assert out is not None
-    assert out.classification.category == "CALENDAR_INVITE"
+    assert out.classification.category == "MOVE_TO_CALENDAR_FOLDER"
 
 
 def test_unrelated_email_does_not_inherit_project_from_sender_cache(tmp_path):

@@ -30,7 +30,7 @@ def choose_target_folder(category: str, suggested_folder: str | None, config: Fo
     if category == "MOVE_TO_PROJECT_FOLDER":
         return _ai_path(config, suggested_folder or "Needs Review")
     if category == "MOVE_TO_CUSTOMER_FOLDER":
-        return _ai_path(config, f"Customer/{suggested_folder or 'Needs Review'}")
+        return _ai_path(config, f"Customers/{suggested_folder or 'Needs Review'}")
     if category in {"MOVE_TO_TRAVEL_FOLDER", "TRAVEL"}:
         return _ai_path(config, "Travel")
     if category in {"MOVE_TO_CALENDAR_FOLDER", "CALENDAR_INVITE", "CALENDAR"}:
@@ -43,4 +43,6 @@ def choose_target_folder(category: str, suggested_folder: str | None, config: Fo
         return _ai_path(config, "Automation")
     if category == "ADMIN":
         return _ai_path(config, "Admin")
+    if category == "NEEDS_REVIEW":
+        return _ai_path(config, "Needs Review")
     return "Inbox"

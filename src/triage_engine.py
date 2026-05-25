@@ -27,7 +27,7 @@ LOW_VALUE_PATTERNS = [
 OPERATIONAL_ROUTING_RULES = [
     ("TRAVEL", "travel_signal", re.compile(r"flight|itinerary|boarding pass|airline|trip|travel", re.I), "Travel"),
     ("TRAVEL", "lodging_transport", re.compile(r"hotel|reservation|booking confirmation|rental car|car hire", re.I), "Travel"),
-    ("CALENDAR_INVITE", "calendar_signal", re.compile(r"calendar invite|invitation|meeting accepted|meeting declined|teams meeting|zoom meeting", re.I), "Calendar"),
+    ("MOVE_TO_CALENDAR_FOLDER", "calendar_signal", re.compile(r"calendar invite|invitation|meeting accepted|meeting declined|teams meeting|zoom meeting", re.I), "Calendar"),
     ("FINANCE", "finance_signal", re.compile(r"expense|receipt|invoice|billing|payment due|reimbursement", re.I), "Finance"),
     ("MOVE_TO_DELETE_FOLDER", "newsletter_signal", re.compile(r"newsletter|digest|unsubscribe", re.I), "Delete"),
 ]
@@ -364,7 +364,7 @@ def heuristic_classify(message: dict, invite_mode: str) -> TriageOutcome | None:
     for p in CUSTOMER_SAFETY_PATTERNS:
         if p.search(subject):
             return TriageOutcome(
-                Classification("NEEDS_REVIEW", "Inbox", 0.8, explain("Customer-safety override", "customer_safety_override", p.pattern, "subject", protected_reason), True),
+                Classification("NEEDS_REVIEW", "AI Sorted/Needs Review", 0.8, explain("Customer-safety override", "customer_safety_override", p.pattern, "subject", protected_reason), True),
                 "heuristic",
                 routing_source="customer_guard",
                 heuristic_match="customer_safety_override",
@@ -399,7 +399,7 @@ def heuristic_classify(message: dict, invite_mode: str) -> TriageOutcome | None:
 
     if any(p.search(combined) for p in LOW_VALUE_PATTERNS):
         return TriageOutcome(
-            Classification("NEEDS_REVIEW", "Inbox", 0.65, explain("Weak low-value signal escalated", "weak_low_value", "LOW_VALUE_PATTERNS", "subject_or_body", protected_reason), True),
+            Classification("NEEDS_REVIEW", "AI Sorted/Needs Review", 0.65, explain("Weak low-value signal escalated", "weak_low_value", "LOW_VALUE_PATTERNS", "subject_or_body", protected_reason), True),
             "heuristic",
         )
     return None

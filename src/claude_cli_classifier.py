@@ -21,7 +21,10 @@ class Classification:
     reason: str
     needs_user_attention: bool
     project: str | None = None
-    organization: str | None = None
+    customer_or_org: str | None = None
+    routing_source: str | None = None
+    operational_class: str | None = None
+    action: str | None = None
     stakeholders: list[str] | None = None
     action_required: bool | None = None
     priority: str | None = None
@@ -61,19 +64,26 @@ class ClaudeCliClassifier:
     def classify(self, message: dict) -> Classification:
         self.last_error = None
         prompt = (
-            "Metadata-first. First classify intent into one of: PROJECT,CUSTOMER,TRAVEL,CALENDAR,ADMIN,FINANCE,NEWSLETTER,AUTOMATION,PERSONAL,UNKNOWN. "
-            "Operational/admin/travel beats project inference. Do not overuse prior project memory. Infer project only with strong evidence. "
-            "Negative examples: Flight booking != project. Calendar reminder != project. Generic corporate announcement != project. "
-            "Then choose category: KEEP_IN_INBOX, MOVE_TO_PROJECT_FOLDER, MOVE_TO_CUSTOMER_FOLDER, MOVE_TO_DELETE_FOLDER, MOVE_TO_TRAVEL_FOLDER, MOVE_TO_CALENDAR_FOLDER, MOVE_TO_FINANCE_FOLDER, MOVE_TO_NEWSLETTER_FOLDER, NEEDS_REVIEW. "
-            "Output format is strict and mandatory: output must start with BEGIN_JSON on its own line, "
-            "then exactly one JSON object with keys: category,target_folder,confidence,reason,needs_user_attention,project,organization,stakeholders,action_required,priority,topics,meeting_related,contains_decision,contains_tasking,short_summary, "
-            "then END_JSON on its own line. No markdown. No explanation. No extra text. "
+            "You are a JSON API, not a chatbot. Return exactly one JSON object. "
+            "Do not include prose, markdown, comments, explanations, or headings. "
+            "Your first character must be { and your last character must be }. "
+            "Classify each email using schema keys only: category,operational_class,action,target_folder,confidence,needs_user_attention,reason,project,customer_or_org,routing_source. "
+            "Allowed operational_class enum: CUSTOMER,PROJECT,TRAVEL,CALENDAR,ADMIN,FINANCE,NEWSLETTER,AUTOMATION,SALES_SPAM,PERSONAL,UNKNOWN. "
+            "Policy: KEEP_IN_INBOX only when directly addressed and likely requires action, urgent/time-sensitive response, explicit user task/request, or user named in action context. "
+            "If uncertain but not action-required -> category NEEDS_REVIEW and target_folder AI Sorted/Needs Review, not Inbox. "
+            "If customer/stakeholder related with no clear project -> category MOVE_TO_CUSTOMER_FOLDER and target_folder AI Sorted/Customers/<customer_or_org>; if customer unknown use AI Sorted/Needs Review. "
+            "Travel/booking/flight/car/hotel -> MOVE_TO_TRAVEL_FOLDER target AI Sorted/Travel. "
+            "Calendar/meeting invite/update -> MOVE_TO_CALENDAR_FOLDER target AI Sorted/Calendar. "
+            "Examples: flight reminder => TRAVEL + AI Sorted/Travel; customer briefing no action => CUSTOMER + AI Sorted/Customers/<org>; direct action request => KEEP_IN_INBOX; newsletter => NEWSLETTER + AI Sorted/Delete; unknown non-action => UNKNOWN + AI Sorted/Needs Review. "
             f"Email: {json.dumps(message)}"
         )
         try:
             text = self._invoke_cli(prompt)
             print(f"Claude CLI raw response (truncated): {repr(text[:500])}")
-            extracted = self._extract_wrapped_json(text) or self._extract_first_json_object(text)
+            try:
+                extracted = self._extract_first_json_object(text)
+            except Exception:
+                extracted = self._extract_wrapped_json(text) or ""
             sanitized = sanitize_control_chars(extracted)
             data = safe_json_loads(sanitized, context="claude_cli.extracted_json", default={}, debug_json=self.debug_json)
             if not isinstance(data, dict) or "category" not in data:
@@ -96,10 +106,12 @@ class ClaudeCliClassifier:
                 reason = "Model response parsing failed (natural language hints detected)"
             return Classification(
                 category="NEEDS_REVIEW",
-                target_folder="Inbox",
+                operational_class="UNKNOWN",
+                action="MOVE",
+                target_folder="AI Sorted/Needs Review",
                 confidence=0.0,
                 reason=reason,
-                needs_user_attention=True,
+                needs_user_attention=False,
                 parse_error=str(exc),
                 raw_response_preview=(f"{preview}\nCLEANED_PREVIEW:{cleaned[:500]}" if cleaned else preview),
             )
@@ -110,8 +122,8 @@ class ClaudeCliClassifier:
             return [self.classify(m) for m in messages]
         prompt = (
             "Metadata-first: classify each email metadata item into one category: KEEP_IN_INBOX, "
-            "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW, CALENDAR_INVITE. "
-            "Return ONLY valid JSON array; every item must include keys: category,target_folder,confidence,reason,needs_user_attention,project,organization,stakeholders,action_required,priority,topics,meeting_related,contains_decision,contains_tasking,short_summary. "
+            "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW, MOVE_TO_CALENDAR_FOLDER. "
+            "Return ONLY valid JSON array; every item must include keys: category,operational_class,action,target_folder,confidence,needs_user_attention,reason,project,customer_or_org,routing_source. "
             f"Emails: {json.dumps(messages)}"
         )
         try:

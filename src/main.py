@@ -226,7 +226,7 @@ def main() -> int:
         if not include_direct_to_me and _is_direct_to_me(m, my_email):
             metrics.c["skipped_direct_to_me"] += 1
             dlog(f"message_id={m.message_id} lifecycle=skipped reason=direct_to_me include_direct_to_me={include_direct_to_me}")
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "KEEP_IN_INBOX", 1.0, "Inbox", "Directly addressed", "", "", True, "KEEP", "skip", "", "", False))
+            decisions.append(DecisionLog(message_id=m.message_id, subject=m.subject, sender=m.sender, recipients=m.recipients, cc=m.cc, received_at=m.received_at, source_folder=m.folder, category="KEEP_IN_INBOX", confidence=1.0, target_folder="Inbox", reason="Directly addressed", parse_error="", raw_response_preview="", needs_user_attention=True, action="KEEP", decision_source="skip"))
             append_normalized(m, "KEEP_IN_INBOX", "KEEP", "Inbox", 1.0, "skipped", reason="Directly addressed", skip_reason="direct_to_me", needs_user_attention=True)
             outcome_counts["skipped"] += 1
             continue
@@ -237,14 +237,14 @@ def main() -> int:
         if h:
             metrics.c["heuristic_hits"] += 1
             dlog(f"message_id={m.message_id} lifecycle=heuristic_classification category={h.classification.category}")
-            if h.classification.category == "CALENDAR_INVITE":
+            if h.classification.category == "MOVE_TO_CALENDAR_FOLDER":
                 metrics.c["invite_hits"] += 1
                 if invite_mode == "tentative":
                     client.try_mark_tentative(m.message_id)
             result = h.classification
             target = choose_target_folder(result.category, result.target_folder, folder_cfg)
             mr, mp, ps = parse_reason_fields(result.reason)
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, getattr(result, "parse_error", "") or "", getattr(result, "raw_response_preview", "") or "", result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}", "heuristic", mr, mp, ps))
+            decisions.append(DecisionLog(message_id=m.message_id, subject=m.subject, sender=m.sender, recipients=m.recipients, cc=m.cc, received_at=m.received_at, source_folder=m.folder, category=result.category, confidence=result.confidence, target_folder=target, reason=result.reason, parse_error=getattr(result, "parse_error", "") or "", raw_response_preview=getattr(result, "raw_response_preview", "") or "", parse_success=(getattr(result, "parse_error", None) in (None, "")), fallback_reason=getattr(result, "parse_error", "") or "", operational_class=getattr(result, "operational_class", "") or "", needs_user_attention=result.needs_user_attention, customer_or_org=getattr(result, "customer_or_org", "") or "", project=getattr(result, "project", "") or "", action="KEEP" if target == "Inbox" else f"MOVE->{target}", decision_source="heuristic", matched_rule=mr, matched_pattern=mp, protected_sender=ps))
             metadata_store.store(m.message_id, meta, result)
             append_normalized(m, result.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, result.confidence, "heuristic", reason=result.reason, needs_user_attention=result.needs_user_attention)
             dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
@@ -254,11 +254,11 @@ def main() -> int:
         if cached and cached.confidence >= confidence_threshold:
             if cached.category == "MOVE_TO_PROJECT_FOLDER" and cached.confidence < project_confidence_threshold:
                 cached.category = "NEEDS_REVIEW"
-                cached.target_folder = "Inbox"
+                cached.target_folder = "AI Sorted/Needs Review"
             metrics.c["cache_hits"] += 1
             dlog(f"message_id={m.message_id} lifecycle=cache_classification category={cached.category} confidence={cached.confidence}")
             target = choose_target_folder(cached.category, cached.target_folder, folder_cfg)
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, cached.category, cached.confidence, target, "classification cache", "", "", False, "KEEP" if target == "Inbox" else f"MOVE->{target}", "cache", "", "", False))
+            decisions.append(DecisionLog(message_id=m.message_id, subject=m.subject, sender=m.sender, recipients=m.recipients, cc=m.cc, received_at=m.received_at, source_folder=m.folder, category=cached.category, confidence=cached.confidence, target_folder=target, reason="classification cache", parse_error="", raw_response_preview="", parse_success=True, fallback_reason="", operational_class=getattr(cached, "operational_class", "") or "", needs_user_attention=False, customer_or_org=getattr(cached, "customer_or_org", "") or "", project=getattr(cached, "project", "") or "", action="KEEP" if target == "Inbox" else f"MOVE->{target}", decision_source="cache"))
             metadata_store.store(m.message_id, meta, cached)
             append_normalized(m, cached.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, cached.confidence, "cache_hit", reason="classification cache")
             dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
@@ -275,16 +275,16 @@ def main() -> int:
         meta = enrich_deterministic_meta({"subject": m.subject, "sender": m.sender, "recipients": m.recipients, "cc": m.cc, "received_at": m.received_at, "folder": m.folder, "body_preview": "" if args.no_body_preview else m.body_preview[:args.max_body_preview_chars]})
         target = choose_target_folder(result.category, result.target_folder, folder_cfg)
         if result.confidence < confidence_threshold:
-            result.category, target = "NEEDS_REVIEW", "Inbox"
+            result.category, target = "NEEDS_REVIEW", "AI Sorted/Needs Review"
         if result.category == "MOVE_TO_PROJECT_FOLDER" and result.confidence < project_confidence_threshold:
-            result.category, target = "NEEDS_REVIEW", "Inbox"
+            result.category, target = "NEEDS_REVIEW", "AI Sorted/Needs Review"
         dlog(f"message_id={m.message_id} lifecycle=final_classification category={result.category} confidence={result.confidence}")
         class_cache.store(m.sender, m.subject, result)
         if result.category == "FAILED":
             outcome_counts["failed"] += 1
         else:
             outcome_counts["classified"] += 1
-        decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, getattr(result, "parse_error", "") or "", getattr(result, "raw_response_preview", "") or "", result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}", "claude", "", "", False))
+        decisions.append(DecisionLog(message_id=m.message_id, subject=m.subject, sender=m.sender, recipients=m.recipients, cc=m.cc, received_at=m.received_at, source_folder=m.folder, category=result.category, confidence=result.confidence, target_folder=target, reason=result.reason, parse_error=getattr(result, "parse_error", "") or "", raw_response_preview=getattr(result, "raw_response_preview", "") or "", parse_success=(getattr(result, "parse_error", None) in (None, "")), fallback_reason=getattr(result, "parse_error", "") or "", operational_class=getattr(result, "operational_class", "") or "", needs_user_attention=result.needs_user_attention, customer_or_org=getattr(result, "customer_or_org", "") or "", project=getattr(result, "project", "") or "", action="KEEP" if target == "Inbox" else f"MOVE->{target}", decision_source="claude"))
         append_normalized(m, result.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, result.confidence, "failed" if result.category == "FAILED" else "classified", reason=result.reason, needs_user_attention=result.needs_user_attention, parse_error=getattr(result, "parse_error", "") or "", raw_response_preview=getattr(result, "raw_response_preview", "") or "")
         dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
         metadata_store.store(m.message_id, meta, result)
@@ -297,7 +297,7 @@ def main() -> int:
 
     for d in decisions:
         action_succeeded = True
-        if d.target_folder != "Inbox" and d.category in {"MOVE_TO_PROJECT_FOLDER", "MOVE_TO_DELETE_FOLDER"} and args.apply:
+        if d.target_folder != "Inbox" and d.target_folder.startswith("AI Sorted/") and args.apply:
             if d.target_folder not in existing_folders and apply_enabled:
                 client.create_folder(d.target_folder)
                 existing_folders.add(d.target_folder)
@@ -307,7 +307,7 @@ def main() -> int:
                 action_succeeded = False
         if args.apply and not args.dry_run and action_succeeded and d.category != "FAILED":
             cache.add(d.message_id, processing_mode="apply", result_hash=current_result_hash)
-        if d.category in {"KEEP_IN_INBOX", "CALENDAR_INVITE"}:
+        if d.category in {"KEEP_IN_INBOX"}:
             summary["kept_in_inbox"] += 1
         elif d.category == "MOVE_TO_PROJECT_FOLDER":
             summary["moved_project"] += 1

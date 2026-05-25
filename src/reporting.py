@@ -23,8 +23,13 @@ class DecisionLog:
     reason: str
     parse_error: str
     raw_response_preview: str
-    needs_user_attention: bool
-    action: str
+    parse_success: bool = True
+    fallback_reason: str = ""
+    operational_class: str = ""
+    needs_user_attention: bool = False
+    customer_or_org: str = ""
+    project: str = ""
+    action: str = ""
     decision_source: str = ""
     matched_rule: str = ""
     matched_pattern: str = ""
@@ -55,7 +60,12 @@ class NormalizedResult:
     reason: str = ""
     parse_error: str = ""
     raw_response_preview: str = ""
+    parse_success: bool = True
+    fallback_reason: str = ""
+    operational_class: str = ""
     needs_user_attention: bool = False
+    customer_or_org: str = ""
+    project: str = ""
     decision_source: str = ""
     matched_rule: str = ""
     matched_pattern: str = ""
