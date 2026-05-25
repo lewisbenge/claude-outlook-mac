@@ -136,9 +136,14 @@ def classify_batch(classifier, metas: Iterable[dict], workers: int, batch_size: 
     def run_one(idx_meta):
         idx, meta = idx_meta
         t0 = time.perf_counter()
-        r = classifier.classify(meta)
-        metrics.record_call(time.perf_counter() - t0)
-        return idx, r
+        try:
+            r = classifier.classify(meta)
+            metrics.record_call(time.perf_counter() - t0)
+            metrics.c["classifier_completed"] += 1
+            return idx, r
+        except Exception as exc:
+            metrics.c["classifier_failed"] += 1
+            return idx, Classification("FAILED", "Inbox", 0.0, f"classifier error: {exc}", True)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
         for idx, result in ex.map(run_one, list(enumerate(metas)), chunksize=max(1, batch_size)):

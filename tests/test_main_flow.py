@@ -97,3 +97,32 @@ def test_run_preflight_rejects_missing_preflight_report(monkeypatch, tmp_path):
     monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
     with pytest.raises(RuntimeError, match="no preflight report was returned"):
         mainmod.run_preflight(C(), B())
+
+
+def test_all_direct_to_me_inbox(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "scripts").mkdir()
+
+    class C:
+        def ensure_outlook_running(self):
+            pass
+        def list_inbox_messages(self, **kwargs):
+            return [SimpleNamespace(message_id="1", subject="a", sender="x", recipients="me@example.com", cc="", received_at="now", folder="Inbox", body_preview=""),
+                    SimpleNamespace(message_id="2", subject="b", sender="y", recipients="me@example.com", cc="", received_at="now", folder="Inbox", body_preview="")]
+        def list_folders(self):
+            return set()
+
+    class B:
+        def classify(self, _):
+            raise AssertionError("classifier should not be called")
+
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "bedrock")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
+    monkeypatch.setenv("USER_EMAIL", "me@example.com")
+    monkeypatch.setattr(mainmod, "OutlookClient", lambda *_: C())
+    monkeypatch.setattr(mainmod, "BedrockClassifier", lambda *_: B())
+    monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr("sys.argv", ["prog", "--dry-run"])
+    assert mainmod.main() == 0
