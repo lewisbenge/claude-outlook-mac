@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 
 
@@ -53,7 +54,8 @@ class BedrockClassifier:
         prompt = (
             "Classify the email metadata into one category: KEEP_IN_INBOX, "
             "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW. "
-            "Return strict JSON only with keys: category,target_folder,confidence,reason,needs_user_attention. "
+            "Return ONLY valid JSON with keys: category,target_folder,confidence,reason,needs_user_attention. "
+            "Do not include markdown. Do not include explanation text. "
             f"Email: {json.dumps(message)}"
         )
         body = json.dumps({
@@ -64,5 +66,95 @@ class BedrockClassifier:
         resp = self.client.invoke_model(modelId=self.model_id, body=body)
         payload = json.loads(resp["body"].read())
         text = payload["content"][0]["text"]
-        data = json.loads(text)
-        return Classification(**data)
+        print(f"Bedrock raw response (truncated): {repr(text[:500])}")
+        try:
+            extracted = self._extract_first_json_object(text)
+            sanitized = self._sanitize_json_text(extracted)
+            data = json.loads(sanitized)
+            return Classification(**data)
+        except Exception as exc:
+            print(f"Bedrock parsing error: {exc}")
+            return Classification(
+                category="NEEDS_REVIEW",
+                target_folder="Inbox",
+                confidence=0.0,
+                reason="Model response parsing failed",
+                needs_user_attention=True,
+            )
+
+    @staticmethod
+    def _extract_first_json_object(text: str) -> str:
+        # Remove common markdown code fence wrappers first.
+        fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+        if fence_match:
+            text = fence_match.group(1)
+
+        start = text.find("{")
+        if start == -1:
+            raise ValueError("No JSON object start found")
+
+        depth = 0
+        in_string = False
+        escaped = False
+        for i, ch in enumerate(text[start:], start=start):
+            if in_string:
+                if escaped:
+                    escaped = False
+                    continue
+                if ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+
+        raise ValueError("No complete JSON object found")
+
+    @staticmethod
+    def _sanitize_json_text(text: str) -> str:
+        # Escape raw control characters in string literals so json.loads can parse safely.
+        out: list[str] = []
+        in_string = False
+        escaped = False
+
+        for ch in text:
+            if in_string:
+                if escaped:
+                    out.append(ch)
+                    escaped = False
+                    continue
+                if ch == "\\":
+                    out.append(ch)
+                    escaped = True
+                    continue
+                if ch == '"':
+                    out.append(ch)
+                    in_string = False
+                    continue
+
+                code = ord(ch)
+                if ch == "\n":
+                    out.append("\\n")
+                elif ch == "\r":
+                    out.append("\\r")
+                elif ch == "\t":
+                    out.append("\\t")
+                elif code < 0x20:
+                    out.append(f"\\u{code:04x}")
+                else:
+                    out.append(ch)
+                continue
+
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+
+        return "".join(out)
