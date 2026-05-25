@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 
+from src.json_utils import safe_json_loads, sanitize_control_chars, truncate_payload
 
 
 @dataclass
@@ -17,7 +18,7 @@ class Classification:
 
 
 class BedrockClassifier:
-    def __init__(self, region: str, model_id: str) -> None:
+    def __init__(self, region: str, model_id: str, debug_json: bool = False) -> None:
         try:
             import boto3
         except ModuleNotFoundError as exc:
@@ -29,6 +30,7 @@ class BedrockClassifier:
         self.model_id = model_id
         self.profile_name = profile_name
         self.region = self.session.region_name or region
+        self.debug_json = debug_json
 
     def _validate_session_credentials(self) -> None:
         creds = self.session.get_credentials()
@@ -64,16 +66,21 @@ class BedrockClassifier:
             "messages": [{"role": "user", "content": prompt}],
         })
         resp = self.client.invoke_model(modelId=self.model_id, body=body)
-        payload = json.loads(resp["body"].read())
-        text = payload["content"][0]["text"]
+        payload = safe_json_loads(
+            resp["body"].read(),
+            context="bedrock.response",
+            default={},
+            debug_json=getattr(self, "debug_json", False),
+        )
+        text = payload.get("content", [{}])[0].get("text", "") if isinstance(payload, dict) else ""
         print(f"Bedrock raw response (truncated): {repr(text[:500])}")
         try:
             extracted = self._extract_first_json_object(text)
-            sanitized = self._sanitize_json_text(extracted)
-            data = json.loads(sanitized)
+            sanitized = sanitize_control_chars(extracted)
+            data = safe_json_loads(sanitized, context="bedrock.extracted_json", default={}, debug_json=getattr(self, "debug_json", False))
             return Classification(**data)
         except Exception as exc:
-            print(f"Bedrock parsing error: {exc}")
+            print(f"Bedrock parsing error: {exc}; payload={truncate_payload(text)}")
             return Classification(
                 category="NEEDS_REVIEW",
                 target_folder="Inbox",
@@ -84,15 +91,12 @@ class BedrockClassifier:
 
     @staticmethod
     def _extract_first_json_object(text: str) -> str:
-        # Remove common markdown code fence wrappers first.
         fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
         if fence_match:
             text = fence_match.group(1)
-
         start = text.find("{")
         if start == -1:
             raise ValueError("No JSON object start found")
-
         depth = 0
         in_string = False
         escaped = False
@@ -106,7 +110,6 @@ class BedrockClassifier:
                 elif ch == '"':
                     in_string = False
                 continue
-
             if ch == '"':
                 in_string = True
             elif ch == "{":
@@ -115,46 +118,4 @@ class BedrockClassifier:
                 depth -= 1
                 if depth == 0:
                     return text[start:i + 1]
-
         raise ValueError("No complete JSON object found")
-
-    @staticmethod
-    def _sanitize_json_text(text: str) -> str:
-        # Escape raw control characters in string literals so json.loads can parse safely.
-        out: list[str] = []
-        in_string = False
-        escaped = False
-
-        for ch in text:
-            if in_string:
-                if escaped:
-                    out.append(ch)
-                    escaped = False
-                    continue
-                if ch == "\\":
-                    out.append(ch)
-                    escaped = True
-                    continue
-                if ch == '"':
-                    out.append(ch)
-                    in_string = False
-                    continue
-
-                code = ord(ch)
-                if ch == "\n":
-                    out.append("\\n")
-                elif ch == "\r":
-                    out.append("\\r")
-                elif ch == "\t":
-                    out.append("\\t")
-                elif code < 0x20:
-                    out.append(f"\\u{code:04x}")
-                else:
-                    out.append(ch)
-                continue
-
-            out.append(ch)
-            if ch == '"':
-                in_string = True
-
-        return "".join(out)

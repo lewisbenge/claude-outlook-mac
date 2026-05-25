@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import csv
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
+
+from src.json_utils import safe_write_json
 
 
 @dataclass
@@ -25,8 +26,7 @@ class DecisionLog:
 
 
 def write_json_report(decisions: Iterable[DecisionLog], output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps([asdict(d) for d in decisions], indent=2), encoding="utf-8")
+    safe_write_json(output_path, [asdict(d) for d in decisions], context=f"report.write:{output_path}")
 
 
 def write_csv_report(decisions: Iterable[DecisionLog], output_path: Path) -> None:
