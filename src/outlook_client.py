@@ -110,6 +110,15 @@ class OutlookClient:
             raise OutlookSafetyError("Live moves are disabled by configuration.")
         self._run_script("outlook_move_message.applescript", message_id, target_folder)
 
+
+    def try_mark_tentative(self, message_id: str) -> bool:
+        try:
+            out = self._run_script("outlook_set_invite_tentative.applescript", message_id)
+            return out.strip().lower() == "ok"
+        except Exception as exc:
+            print(f"WARNING: tentative invite response not supported or failed: {exc}")
+            return False
+
     def send_message(self, *_: str) -> None:
         raise OutlookSafetyError("Sending is prohibited by policy")
 
