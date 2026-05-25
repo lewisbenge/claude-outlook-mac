@@ -15,11 +15,27 @@ on run argv
     repeat with i from 1 to maxCount
       set msg to item i of inboxMessages
       set msgPreview to ""
+      set msgSubject to ""
+      set msgSender to ""
+      set msgReceived to ""
+      set msgId to ""
       try
-        set msgPreview to content of msg as text
+        set msgSubject to (subject of msg) as string
+      end try
+      try
+        set msgSender to (sender of msg) as string
+      end try
+      try
+        set msgReceived to (time received of msg) as string
+      end try
+      try
+        set msgId to (id of msg) as string
+      end try
+      try
+        set msgPreview to (content of msg) as string
       end try
       if (length of msgPreview) > previewMax then set msgPreview to text 1 thru previewMax of msgPreview
-      set row to "{\"message_id\":\"" & (id of msg as text) & "\",\"subject\":\"" & my e(subject of msg as text) & "\",\"sender\":\"" & my e(sender of msg as text) & "\",\"recipients\":\"\",\"cc\":\"\",\"received_at\":\"" & my e(time received of msg as text) & "\",\"folder\":\"Inbox\",\"body_preview\":\"" & my e(msgPreview) & "\"}"
+      set row to "{\"message_id\":\"" & my e(msgId) & "\",\"subject\":\"" & my e(msgSubject) & "\",\"sender\":\"" & my e(msgSender) & "\",\"recipients\":\"\",\"cc\":\"\",\"received_at\":\"" & my e(msgReceived) & "\",\"folder\":\"Inbox\",\"body_preview\":\"" & my e(msgPreview) & "\"}"
       if i > 1 then set jsonRows to jsonRows & ","
       set jsonRows to jsonRows & row
     end repeat
