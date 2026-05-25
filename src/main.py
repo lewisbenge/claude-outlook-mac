@@ -90,6 +90,7 @@ def main() -> int:
 
     region = os.getenv("AWS_REGION")
     model_id = os.getenv("BEDROCK_MODEL_ID")
+    inference_profile_arn = os.getenv("BEDROCK_INFERENCE_PROFILE_ARN")
     if not region or not model_id:
         raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID")
 
@@ -98,7 +99,7 @@ def main() -> int:
     except TypeError:
         client = OutlookClient(Path("scripts"))
     try:
-        classifier = BedrockClassifier(region, model_id, debug_json=args.debug_json)
+        classifier = BedrockClassifier(region, model_id, inference_profile_arn=inference_profile_arn, debug_json=args.debug_json)
     except TypeError:
         classifier = BedrockClassifier(region, model_id)
     run_preflight(client, classifier)
