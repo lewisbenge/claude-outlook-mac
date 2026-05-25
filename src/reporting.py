@@ -25,12 +25,31 @@ class DecisionLog:
     action: str
 
 
+@dataclass
+class NormalizedResult:
+    message_id: str
+    classification: str
+    action: str
+    target_folder: str
+    confidence: float
+    status: str
+    skip_reason: str = ""
+    subject: str = ""
+    sender: str = ""
+    recipients: str = ""
+    cc: str = ""
+    received_at: str = ""
+    source_folder: str = ""
+    reason: str = ""
+    needs_user_attention: bool = False
+
+
 def write_json_report(decisions: Iterable[DecisionLog], output_path: Path) -> None:
     safe_write_json(output_path, [asdict(d) for d in decisions], context=f"report.write:{output_path}")
 
 
-def write_csv_report(decisions: Iterable[DecisionLog], output_path: Path) -> None:
-    rows = [asdict(d) for d in decisions]
+def write_csv_report(normalized_results: Iterable[NormalizedResult], output_path: Path) -> None:
+    rows = [asdict(d) for d in normalized_results]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         output_path.write_text("", encoding="utf-8")

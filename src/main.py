@@ -16,7 +16,7 @@ from src.claude_cli_classifier import ClaudeCliClassifier
 from src.cache import ProcessedCache
 from src.folder_rules import FolderRuleConfig, choose_target_folder
 from src.outlook_client import OutlookClient
-from src.reporting import DecisionLog, write_csv_report, write_json_report
+from src.reporting import DecisionLog, NormalizedResult, write_csv_report, write_json_report
 from src.triage_engine import (
     ClassificationCache,
     Metrics,
@@ -112,13 +112,35 @@ def main() -> int:
     metrics.c["inbox_messages_retrieved"] = len(messages)
 
     decisions: list[DecisionLog] = []
+    normalized_results: list[NormalizedResult] = []
     summary = {"kept_in_inbox": 0, "moved_project": 0, "moved_delete": 0, "needs_review": 0, "failed": 0}
     folder_cfg = FolderRuleConfig(root_folder_name="AI Sorted", delete_folder_leaf="Delete")
     existing_folders = client.list_folders()
 
     to_classify = []
     pending_messages = []
-    outcome_counts = {"skipped": 0, "classified": 0, "failed": 0}
+    outcome_counts = {"skipped": 0, "heuristics": 0, "cache_hits": 0, "classified": 0, "failed": 0}
+
+    def append_normalized(message, classification: str, action: str, target_folder: str, confidence: float, status: str, reason: str = "", skip_reason: str = "", needs_user_attention: bool = False) -> None:
+        normalized_results.append(
+            NormalizedResult(
+                message_id=message.message_id,
+                classification=classification,
+                action=action,
+                target_folder=target_folder,
+                confidence=confidence,
+                status=status,
+                skip_reason=skip_reason,
+                subject=message.subject,
+                sender=message.sender,
+                recipients=message.recipients,
+                cc=message.cc,
+                received_at=message.received_at,
+                source_folder=message.folder,
+                reason=reason,
+                needs_user_attention=needs_user_attention,
+            )
+        )
     for m in messages:
         dlog(f"message_id={m.message_id} lifecycle=retrieved")
         if cache.contains(m.message_id):
@@ -131,10 +153,12 @@ def main() -> int:
             dlog(f"message_id={m.message_id} lifecycle=skipped reason=direct_to_me include_direct_to_me={include_direct_to_me}")
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "KEEP_IN_INBOX", 1.0, "Inbox", "Directly addressed", True, "KEEP"))
             cache.add(m.message_id)
+            append_normalized(m, "KEEP_IN_INBOX", "KEEP", "Inbox", 1.0, "skipped", reason="Directly addressed", skip_reason="direct_to_me", needs_user_attention=True)
             outcome_counts["skipped"] += 1
             continue
         meta = {"subject": m.subject, "sender": m.sender, "recipients": m.recipients, "cc": m.cc, "received_at": m.received_at, "folder": m.folder, "body_preview": "" if args.no_body_preview else m.body_preview[:args.max_body_preview_chars]}
         meta = enrich_deterministic_meta(meta)
+        dlog(f"message_id={m.message_id} lifecycle=filtered")
         h = heuristic_classify(meta, invite_mode)
         if h:
             metrics.c["heuristic_hits"] += 1
@@ -148,7 +172,9 @@ def main() -> int:
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             metadata_store.store(m.message_id, meta, result)
             cache.add(m.message_id)
-            outcome_counts["skipped"] += 1
+            append_normalized(m, result.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, result.confidence, "heuristic", reason=result.reason, needs_user_attention=result.needs_user_attention)
+            dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
+            outcome_counts["heuristics"] += 1
             continue
         cached = class_cache.lookup(m.sender, m.subject)
         if cached and cached.confidence >= confidence_threshold:
@@ -158,7 +184,9 @@ def main() -> int:
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, cached.category, cached.confidence, target, "classification cache", False, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             metadata_store.store(m.message_id, meta, cached)
             cache.add(m.message_id)
-            outcome_counts["skipped"] += 1
+            append_normalized(m, cached.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, cached.confidence, "cache_hit", reason="classification cache")
+            dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
+            outcome_counts["cache_hits"] += 1
             continue
         to_classify.append(meta)
         pending_messages.append(m)
@@ -167,6 +195,7 @@ def main() -> int:
 
     classified = classify_batch(classifier, to_classify, workers=workers, batch_size=batch_size, metrics=metrics)
     for m, result in zip(pending_messages, classified):
+        dlog(f"message_id={m.message_id} lifecycle=claude_result category={result.category} confidence={result.confidence}")
         meta = enrich_deterministic_meta({"subject": m.subject, "sender": m.sender, "recipients": m.recipients, "cc": m.cc, "received_at": m.received_at, "folder": m.folder, "body_preview": "" if args.no_body_preview else m.body_preview[:args.max_body_preview_chars]})
         target = choose_target_folder(result.category, result.target_folder, folder_cfg)
         if result.confidence < confidence_threshold:
@@ -178,6 +207,8 @@ def main() -> int:
         else:
             outcome_counts["classified"] += 1
         decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+        append_normalized(m, result.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, result.confidence, "failed" if result.category == "FAILED" else "classified", reason=result.reason, needs_user_attention=result.needs_user_attention)
+        dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
         metadata_store.store(m.message_id, meta, result)
         if getattr(result, "project", None):
             metrics.c["extracted_projects"] += 1
@@ -208,19 +239,31 @@ def main() -> int:
     cache.save()
     reports_dir = Path("reports")
     write_json_report(decisions, reports_dir / "dry_run_report.json")
-    write_csv_report(decisions, reports_dir / "dry_run_report.csv")
+    write_csv_report(normalized_results, reports_dir / "dry_run_report.csv")
+    for row in normalized_results:
+        dlog(f"message_id={row.message_id} lifecycle=report_row_written status={row.status}")
     shutil.copyfile(reports_dir / "dry_run_report.json", reports_dir / "latest.json")
     shutil.copyfile(reports_dir / "dry_run_report.csv", reports_dir / "latest.csv")
     metrics.c["final_report_entries"] = len(decisions)
     outcome_skipped = outcome_counts["skipped"]
+    outcome_heuristics = outcome_counts["heuristics"]
+    outcome_cache_hits = outcome_counts["cache_hits"]
     outcome_classified = outcome_counts["classified"]
     outcome_failed = outcome_counts["failed"]
-    outcome_total = outcome_skipped + outcome_classified + outcome_failed
+    outcome_total = outcome_skipped + outcome_heuristics + outcome_cache_hits + outcome_classified + outcome_failed
     if outcome_total != metrics.c["inbox_messages_retrieved"]:
         raise RuntimeError(
-            "Invariant violated: inbox_count != skipped + classified + failed "
-            f"({metrics.c['inbox_messages_retrieved']} != {outcome_skipped} + {outcome_classified} + {outcome_failed})"
+            "Invariant violated: total_inbox_messages != skipped + heuristics + cache_hits + classified + failed "
+            f"({metrics.c['inbox_messages_retrieved']} != {outcome_skipped} + {outcome_heuristics} + {outcome_cache_hits} + {outcome_classified} + {outcome_failed})"
         )
+    if metrics.c["inbox_messages_retrieved"] > 0 and not normalized_results and outcome_skipped != metrics.c["inbox_messages_retrieved"]:
+        raise RuntimeError("Invariant violated: emails were retrieved but no normalized results were emitted.")
+    if any(r.status == "skipped" and not r.skip_reason for r in normalized_results):
+        raise RuntimeError("Invariant violated: skipped emails must include explicit skip_reason.")
+
+    actions_generated = sum(1 for r in normalized_results if r.action != "KEEP")
+    dlog(f"pipeline_summary retrieved={metrics.c['inbox_messages_retrieved']} skipped={outcome_skipped} classified={outcome_classified} actions_generated={actions_generated} report_rows_written={len(normalized_results)}")
+    print(f"Pipeline Summary: retrieved={metrics.c['inbox_messages_retrieved']} skipped={outcome_skipped} classified={outcome_classified} actions_generated={actions_generated} report_rows_written={len(normalized_results)}")
 
     print(f"Summary: {summary}")
     print(f"Metrics: {metrics.as_dict()}")
