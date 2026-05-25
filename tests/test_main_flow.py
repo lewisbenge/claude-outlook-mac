@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import src.main as mainmod
 
 
@@ -73,3 +75,22 @@ def test_apply_disabled_safety(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS"])
     assert mainmod.main() == 0
     assert moved["called"] is True
+
+
+def test_run_preflight_rejects_missing_preflight_report(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    class C:
+        preflight_report = None
+
+        def preflight_permission_check(self):
+            return None
+
+    class B:
+        def preflight_check(self):
+            pass
+
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
+    with pytest.raises(RuntimeError, match="no preflight report was returned"):
+        mainmod.run_preflight(C(), B())
