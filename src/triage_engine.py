@@ -51,6 +51,7 @@ class ClassificationCache:
                 """
                 CREATE TABLE IF NOT EXISTS classification_cache (
                   key TEXT PRIMARY KEY,
+                  thread_key TEXT,
                   sender TEXT,
                   domain TEXT,
                   subject_key TEXT,
@@ -62,10 +63,17 @@ class ClassificationCache:
                 """
             )
 
+    @staticmethod
+    def make_thread_key(subject: str) -> str:
+        normalized = re.sub(r"^(re|fw|fwd)\s*:\s*", "", (subject or "").strip(), flags=re.I)
+        normalized = re.sub(r"\s+", " ", normalized).lower()
+        return normalized[:120]
+
     def lookup(self, sender: str, subject: str):
         domain = sender.split("@")[-1].lower() if "@" in sender else ""
         subject_key = subject[:80].lower()
-        keys = [f"sender:{sender.lower()}", f"domain:{domain}", f"subject:{subject_key}"]
+        thread_key = self.make_thread_key(subject)
+        keys = [f"thread:{thread_key}", f"sender:{sender.lower()}", f"domain:{domain}", f"subject:{subject_key}"]
         with self._connect() as con:
             for key in keys:
                 row = con.execute(
@@ -79,24 +87,136 @@ class ClassificationCache:
     def store(self, sender: str, subject: str, result: Classification):
         domain = sender.split("@")[-1].lower() if "@" in sender else ""
         subject_key = subject[:80].lower()
+        thread_key = self.make_thread_key(subject)
         rows = [
-            (f"sender:{sender.lower()}", sender.lower(), domain, subject_key, result.category, result.target_folder, result.confidence),
-            (f"domain:{domain}", sender.lower(), domain, subject_key, result.category, result.target_folder, result.confidence),
-            (f"subject:{subject_key}", sender.lower(), domain, subject_key, result.category, result.target_folder, result.confidence),
+            (f"thread:{thread_key}", thread_key, sender.lower(), domain, subject_key, result.category, result.target_folder, result.confidence),
+            (f"sender:{sender.lower()}", thread_key, sender.lower(), domain, subject_key, result.category, result.target_folder, result.confidence),
+            (f"domain:{domain}", thread_key, sender.lower(), domain, subject_key, result.category, result.target_folder, result.confidence),
+            (f"subject:{subject_key}", thread_key, sender.lower(), domain, subject_key, result.category, result.target_folder, result.confidence),
         ]
         with self._lock:
             with self._connect() as con:
                 con.executemany(
                     """
-                    INSERT INTO classification_cache(key,sender,domain,subject_key,category,target_folder,confidence)
-                    VALUES(?,?,?,?,?,?,?)
+                    INSERT INTO classification_cache(key,thread_key,sender,domain,subject_key,category,target_folder,confidence)
+                    VALUES(?,?,?,?,?,?,?,?)
                     ON CONFLICT(key) DO UPDATE SET
-                      sender=excluded.sender,domain=excluded.domain,subject_key=excluded.subject_key,
+                      thread_key=excluded.thread_key,sender=excluded.sender,domain=excluded.domain,subject_key=excluded.subject_key,
                       category=excluded.category,target_folder=excluded.target_folder,confidence=excluded.confidence,
                       updated_at=CURRENT_TIMESTAMP
                     """,
                     rows,
                 )
+
+
+class OperationalMetadataStore:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _connect(self):
+        return sqlite3.connect(self.db_path)
+
+    def _init_db(self):
+        with self._connect() as con:
+            con.execute("CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL)")
+            con.execute("CREATE TABLE IF NOT EXISTS stakeholders (id INTEGER PRIMARY KEY, email TEXT UNIQUE, name TEXT)")
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS email_metadata (
+                message_id TEXT PRIMARY KEY,
+                thread_key TEXT,
+                sender TEXT,
+                sender_domain TEXT,
+                recurring_thread INTEGER DEFAULT 0,
+                calendar_invite INTEGER DEFAULT 0,
+                source_system TEXT,
+                project_id INTEGER,
+                organization TEXT,
+                action_required INTEGER,
+                priority TEXT,
+                topics_json TEXT,
+                meeting_related INTEGER,
+                contains_decision INTEGER,
+                contains_tasking INTEGER,
+                short_summary TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+                )"""
+            )
+            con.execute("CREATE TABLE IF NOT EXISTS email_stakeholders (message_id TEXT, stakeholder_id INTEGER, PRIMARY KEY(message_id, stakeholder_id))")
+
+    def _upsert_project(self, con, name: str | None):
+        if not name:
+            return None
+        con.execute("INSERT OR IGNORE INTO projects(name) VALUES(?)", (name.strip(),))
+        row = con.execute("SELECT id FROM projects WHERE name=?", (name.strip(),)).fetchone()
+        return row[0] if row else None
+
+    def _upsert_stakeholder(self, con, s: str):
+        val = (s or "").strip()
+        if not val:
+            return None
+        email = val if "@" in val else None
+        name = None if email else val
+        con.execute("INSERT OR IGNORE INTO stakeholders(email,name) VALUES(?,?)", (email, name))
+        row = con.execute("SELECT id FROM stakeholders WHERE email IS ? AND name IS ?", (email, name)).fetchone()
+        return row[0] if row else None
+
+    def store(self, message_id: str, metadata: dict, cls: Classification):
+        with self._connect() as con:
+            project_id = self._upsert_project(con, cls.project)
+            con.execute(
+                """INSERT OR REPLACE INTO email_metadata(
+                    message_id,thread_key,sender,sender_domain,recurring_thread,calendar_invite,source_system,project_id,organization,
+                    action_required,priority,topics_json,meeting_related,contains_decision,contains_tasking,short_summary
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    message_id,
+                    metadata.get("thread_key"),
+                    metadata.get("sender"),
+                    metadata.get("sender_domain"),
+                    int(bool(metadata.get("recurring_thread"))),
+                    int(bool(metadata.get("calendar_invite"))),
+                    metadata.get("source_system"),
+                    project_id,
+                    cls.organization,
+                    None if cls.action_required is None else int(bool(cls.action_required)),
+                    cls.priority,
+                    str(cls.topics or []),
+                    None if cls.meeting_related is None else int(bool(cls.meeting_related)),
+                    None if cls.contains_decision is None else int(bool(cls.contains_decision)),
+                    None if cls.contains_tasking is None else int(bool(cls.contains_tasking)),
+                    cls.short_summary,
+                ),
+            )
+            for s in (cls.stakeholders or []):
+                sid = self._upsert_stakeholder(con, s)
+                if sid:
+                    con.execute("INSERT OR IGNORE INTO email_stakeholders(message_id, stakeholder_id) VALUES(?,?)", (message_id, sid))
+
+
+def enrich_deterministic_meta(meta: dict) -> dict:
+    sender = meta.get("sender") or ""
+    subject = meta.get("subject") or ""
+    body_preview = meta.get("body_preview") or ""
+    domain = sender.split("@")[-1].lower() if "@" in sender else ""
+    combined = f"{subject} {body_preview}".lower()
+    source_system = ""
+    if any(token in combined for token in ("salesforce", "sfdc")):
+        source_system = "salesforce"
+    elif "jira" in combined:
+        source_system = "jira"
+    elif "github" in combined or "pull request" in combined:
+        source_system = "github"
+    return {
+        **meta,
+        "sender_domain": domain,
+        "thread_key": ClassificationCache.make_thread_key(subject),
+        "recurring_thread": bool(re.search(r"daily|weekly|monthly|digest|summary", combined)),
+        "calendar_invite": bool(any(p.search(combined) for p in INVITE_PATTERNS)),
+        "source_system": source_system,
+    }
 
 
 class Metrics:
