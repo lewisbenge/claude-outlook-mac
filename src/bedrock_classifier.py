@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 
 
@@ -20,8 +21,33 @@ class BedrockClassifier:
             import boto3
         except ModuleNotFoundError as exc:
             raise RuntimeError("boto3 is required for Bedrock classification") from exc
-        self.client = boto3.client("bedrock-runtime", region_name=region)
+        profile_name = os.getenv("AWS_PROFILE") or None
+        self.session = boto3.Session(profile_name=profile_name, region_name=region)
+        self._validate_session_credentials()
+        self.client = self.session.client("bedrock-runtime")
         self.model_id = model_id
+        self.profile_name = profile_name
+        self.region = self.session.region_name or region
+
+    def _validate_session_credentials(self) -> None:
+        creds = self.session.get_credentials()
+        if creds is None:
+            profile_name = os.getenv("AWS_PROFILE") or "default credential chain"
+            raise RuntimeError(
+                f"AWS credentials are not configured or could not be resolved for '{profile_name}'. "
+                "Run `aws sts get-caller-identity` to verify your environment/profile."
+            )
+
+    def preflight_check(self) -> None:
+        self._validate_session_credentials()
+        active_profile = self.session.profile_name or os.getenv("AWS_PROFILE") or "(default)"
+        active_region = self.session.region_name or self.region or "(unset)"
+        print(
+            "AWS preflight: "
+            f"profile={active_profile}, "
+            f"region={active_region}, "
+            "credentials_resolved=true"
+        )
 
     def classify(self, message: dict) -> Classification:
         prompt = (

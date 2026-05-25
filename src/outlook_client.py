@@ -22,9 +22,21 @@ class OutlookSafetyError(RuntimeError):
     pass
 
 
+@dataclass
+class PreflightReport:
+    automation_access: str
+    inbox_access: str
+    folder_enumeration: str
+    folder_create: str
+    move_support: str
+    warnings: list[str]
+    status: str
+
+
 class OutlookClient:
     def __init__(self, scripts_dir: Path) -> None:
         self.scripts_dir = scripts_dir
+        self.preflight_report: PreflightReport | None = None
 
     def _run_script(self, script_name: str, *args: str) -> str:
         script_path = self.scripts_dir / script_name

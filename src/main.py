@@ -45,11 +45,20 @@ def str_to_bool(value: str | bool | None) -> bool:
 
 
 def run_preflight(client: OutlookClient, classifier: BedrockClassifier) -> None:
-    client.preflight_permission_check()
+    report = client.preflight_permission_check()
+    print(
+        "Outlook preflight: "
+        f"status={report.status}, "
+        f"automation_access={report.automation_access}, "
+        f"inbox_access={report.inbox_access}, "
+        f"folder_enumeration={report.folder_enumeration}, "
+        f"folder_create={report.folder_create}, "
+        f"move_support={report.move_support}"
+    )
+    for warning in report.warnings:
+        print(f"WARNING: {warning}")
     if not os.getenv("AWS_REGION") or not os.getenv("BEDROCK_MODEL_ID"):
         raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID")
-    if not (os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE") or os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")):
-        raise RuntimeError("AWS credentials are not configured")
     Path("reports").mkdir(parents=True, exist_ok=True)
     testfile = Path("reports/.write_test")
     testfile.write_text("ok", encoding="utf-8")
@@ -99,7 +108,11 @@ def main() -> int:
         unread_only=args.unread_only,
     )
     folder_cfg = FolderRuleConfig(root_folder_name="AI Sorted", delete_folder_leaf="Delete")
-    existing_folders = client.list_folders()
+    try:
+        existing_folders = client.list_folders()
+    except Exception as exc:
+        print(f"WARNING: Folder listing unavailable in runtime; relying on direct create/move behavior. {exc}")
+        existing_folders = set()
 
     decisions: list[DecisionLog] = []
     summary = {"kept_in_inbox": 0, "moved_project": 0, "moved_delete": 0, "needs_review": 0, "failed": 0}
