@@ -133,7 +133,7 @@ def main() -> int:
     pending_messages = []
     outcome_counts = {"skipped": 0, "heuristics": 0, "cache_hits": 0, "classified": 0, "failed": 0}
 
-    def append_normalized(message, classification: str, action: str, target_folder: str, confidence: float, status: str, reason: str = "", skip_reason: str = "", needs_user_attention: bool = False) -> None:
+    def append_normalized(message, classification: str, action: str, target_folder: str, confidence: float, status: str, reason: str = "", skip_reason: str = "", needs_user_attention: bool = False, parse_error: str = "", raw_response_preview: str = "") -> None:
         normalized_results.append(
             NormalizedResult(
                 message_id=message.message_id,
@@ -150,6 +150,8 @@ def main() -> int:
                 received_at=message.received_at,
                 source_folder=message.folder,
                 reason=reason,
+                parse_error=parse_error,
+                raw_response_preview=raw_response_preview,
                 needs_user_attention=needs_user_attention,
             )
         )
@@ -163,7 +165,7 @@ def main() -> int:
         if not include_direct_to_me and _is_direct_to_me(m, my_email):
             metrics.c["skipped_direct_to_me"] += 1
             dlog(f"message_id={m.message_id} lifecycle=skipped reason=direct_to_me include_direct_to_me={include_direct_to_me}")
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "KEEP_IN_INBOX", 1.0, "Inbox", "Directly addressed", True, "KEEP"))
+            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "KEEP_IN_INBOX", 1.0, "Inbox", "Directly addressed", "", "", True, "KEEP"))
             cache.add(m.message_id)
             append_normalized(m, "KEEP_IN_INBOX", "KEEP", "Inbox", 1.0, "skipped", reason="Directly addressed", skip_reason="direct_to_me", needs_user_attention=True)
             outcome_counts["skipped"] += 1
@@ -181,7 +183,7 @@ def main() -> int:
                     client.try_mark_tentative(m.message_id)
             result = h.classification
             target = choose_target_folder(result.category, result.target_folder, folder_cfg)
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, getattr(result, "parse_error", "") or "", getattr(result, "raw_response_preview", "") or "", result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             metadata_store.store(m.message_id, meta, result)
             cache.add(m.message_id)
             append_normalized(m, result.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, result.confidence, "heuristic", reason=result.reason, needs_user_attention=result.needs_user_attention)
@@ -193,7 +195,7 @@ def main() -> int:
             metrics.c["cache_hits"] += 1
             dlog(f"message_id={m.message_id} lifecycle=cache_classification category={cached.category} confidence={cached.confidence}")
             target = choose_target_folder(cached.category, cached.target_folder, folder_cfg)
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, cached.category, cached.confidence, target, "classification cache", False, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, cached.category, cached.confidence, target, "classification cache", "", "", False, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             metadata_store.store(m.message_id, meta, cached)
             cache.add(m.message_id)
             append_normalized(m, cached.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, cached.confidence, "cache_hit", reason="classification cache")
@@ -218,8 +220,8 @@ def main() -> int:
             outcome_counts["failed"] += 1
         else:
             outcome_counts["classified"] += 1
-        decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
-        append_normalized(m, result.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, result.confidence, "failed" if result.category == "FAILED" else "classified", reason=result.reason, needs_user_attention=result.needs_user_attention)
+        decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, getattr(result, "parse_error", "") or "", getattr(result, "raw_response_preview", "") or "", result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+        append_normalized(m, result.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, result.confidence, "failed" if result.category == "FAILED" else "classified", reason=result.reason, needs_user_attention=result.needs_user_attention, parse_error=getattr(result, "parse_error", "") or "", raw_response_preview=getattr(result, "raw_response_preview", "") or "")
         dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
         metadata_store.store(m.message_id, meta, result)
         if getattr(result, "project", None):

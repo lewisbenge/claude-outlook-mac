@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.bedrock_classifier import BedrockClassifier
 from src.json_utils import safe_json_loads, sanitize_control_chars, truncate_payload
@@ -27,6 +29,8 @@ class Classification:
     contains_decision: bool | None = None
     contains_tasking: bool | None = None
     short_summary: str | None = None
+    parse_error: str | None = None
+    raw_response_preview: str | None = None
 
 
 class ClaudeCliClassifier:
@@ -58,29 +62,38 @@ class ClaudeCliClassifier:
         prompt = (
             "Metadata-first: classify email metadata into one category: KEEP_IN_INBOX, "
             "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW. "
-            "Return ONLY valid JSON with keys: category,target_folder,confidence,reason,needs_user_attention,project,organization,stakeholders,action_required,priority,topics,meeting_related,contains_decision,contains_tasking,short_summary. "
-            "Do not include markdown. Do not include explanation text. "
+            "Output format is strict and mandatory: output must start with BEGIN_JSON on its own line, "
+            "then exactly one JSON object with keys: category,target_folder,confidence,reason,needs_user_attention,project,organization,stakeholders,action_required,priority,topics,meeting_related,contains_decision,contains_tasking,short_summary, "
+            "then END_JSON on its own line. No markdown. No explanation. No extra text. "
             f"Email: {json.dumps(message)}"
         )
         try:
             text = self._invoke_cli(prompt)
             print(f"Claude CLI raw response (truncated): {repr(text[:500])}")
-            extracted = self._extract_first_json_object(text)
+            extracted = self._extract_wrapped_json(text) or self._extract_first_json_object(text)
             sanitized = sanitize_control_chars(extracted)
             data = safe_json_loads(sanitized, context="claude_cli.extracted_json", default={}, debug_json=self.debug_json)
+            data.setdefault("parse_error", None)
+            data.setdefault("raw_response_preview", text[:500])
             return Classification(**data)
         except Exception as exc:
             self.last_error = str(exc)
-            print(f"Claude CLI parsing error: {exc}; payload={truncate_payload(locals().get('text', ''))}")
+            raw = locals().get("text", "")
+            preview = raw[:500]
+            print(f"Claude CLI parsing error: {exc}; payload={truncate_payload(raw)}")
             reason = "Model response parsing failed"
             if "timed out" in str(exc).lower():
                 reason = f"Claude timeout: {exc}"
+            elif self._has_obvious_classification_hints(raw):
+                reason = "Model response parsing failed (natural language hints detected)"
             return Classification(
                 category="NEEDS_REVIEW",
                 target_folder="Inbox",
                 confidence=0.0,
                 reason=reason,
                 needs_user_attention=True,
+                parse_error=str(exc),
+                raw_response_preview=preview,
             )
 
 
@@ -125,6 +138,7 @@ class ClaudeCliClassifier:
         self.last_latency_seconds = time.perf_counter() - t0
         stdout = result.stdout or ""
         stderr = result.stderr or ""
+        self._write_raw_debug(stdout, stderr)
         if result.returncode != 0:
             err_text = f"Claude CLI failed (exit={result.returncode}): {truncate_payload(stderr or stdout)}"
             low = (stderr + "\n" + stdout).lower()
@@ -135,5 +149,40 @@ class ClaudeCliClassifier:
                 )
             raise RuntimeError(err_text)
         return stdout
+
+    @staticmethod
+    def _extract_wrapped_json(text: str) -> str | None:
+        start_marker = "BEGIN_JSON"
+        end_marker = "END_JSON"
+        if start_marker not in text or end_marker not in text:
+            return None
+        start = text.find(start_marker) + len(start_marker)
+        end = text.find(end_marker, start)
+        if end < 0:
+            return None
+        return text[start:end].strip()
+
+    @staticmethod
+    def _has_obvious_classification_hints(text: str) -> bool:
+        low = (text or "").lower()
+        hints = [
+            "needs_review",
+            "keep_in_inbox",
+            "move_to_project_folder",
+            "move_to_delete_folder",
+            "needs review",
+            "keep in inbox",
+            "move to project",
+            "move to delete",
+        ]
+        return any(h in low for h in hints)
+
+    def _write_raw_debug(self, stdout: str, stderr: str) -> None:
+        if os.getenv("DEBUG_CLAUDE_RAW", "").strip().lower() != "true":
+            return
+        ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+        path = Path("debug") / f"claude_raw_{ts}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}\n", encoding="utf-8")
 
     _extract_first_json_object = staticmethod(BedrockClassifier._extract_first_json_object)

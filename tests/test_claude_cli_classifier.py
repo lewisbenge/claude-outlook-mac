@@ -40,3 +40,40 @@ def test_auth_error(monkeypatch):
     c = ClaudeCliClassifier()
     res = c.classify({'subject': 'x'})
     assert res.category == 'NEEDS_REVIEW'
+
+
+def test_classify_parses_begin_end_json(monkeypatch):
+    payload = 'BEGIN_JSON\n{"category":"KEEP_IN_INBOX","target_folder":"Inbox","confidence":0.9,"reason":"ok","needs_user_attention":false}\nEND_JSON'
+    monkeypatch.setattr(subprocess, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess(args=['claude'], returncode=0, stdout=payload, stderr=''))
+    c = ClaudeCliClassifier()
+    res = c.classify({'subject': 'x'})
+    assert res.category == 'KEEP_IN_INBOX'
+    assert res.raw_response_preview
+
+
+def test_classify_markdown_fenced_response(monkeypatch):
+    payload = '```json\n{"category":"MOVE_TO_DELETE_FOLDER","target_folder":"AI Sorted/Delete","confidence":0.8,"reason":"promo","needs_user_attention":false}\n```'
+    monkeypatch.setattr(subprocess, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess(args=['claude'], returncode=0, stdout=payload, stderr=''))
+    c = ClaudeCliClassifier()
+    res = c.classify({'subject': 'x'})
+    assert res.category == 'MOVE_TO_DELETE_FOLDER'
+
+
+def test_classify_prose_response_fallback(monkeypatch):
+    payload = "This should probably be NEEDS_REVIEW due to ambiguity."
+    monkeypatch.setattr(subprocess, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess(args=['claude'], returncode=0, stdout=payload, stderr=''))
+    c = ClaudeCliClassifier()
+    res = c.classify({'subject': 'x'})
+    assert res.category == 'NEEDS_REVIEW'
+    assert "natural language hints detected" in res.reason
+    assert res.raw_response_preview.startswith("This should")
+
+
+def test_classify_malformed_json_preserves_raw_preview(monkeypatch):
+    payload = '{"category":"KEEP_IN_INBOX","target_folder":"Inbox"'
+    monkeypatch.setattr(subprocess, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess(args=['claude'], returncode=0, stdout=payload, stderr=''))
+    c = ClaudeCliClassifier()
+    res = c.classify({'subject': 'x'})
+    assert res.category == 'NEEDS_REVIEW'
+    assert res.parse_error
+    assert res.raw_response_preview.startswith('{"category"')
