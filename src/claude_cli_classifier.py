@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 
 from src.bedrock_classifier import BedrockClassifier
@@ -29,10 +30,12 @@ class Classification:
 
 
 class ClaudeCliClassifier:
-    def __init__(self, command: str = "claude", timeout_seconds: int = 60, debug_json: bool = False) -> None:
+    def __init__(self, command: str = "claude", timeout_seconds: int = 180, debug_json: bool = False) -> None:
         self.command = command
         self.timeout_seconds = timeout_seconds
         self.debug_json = debug_json
+        self.last_latency_seconds: float | None = None
+        self.last_error: str | None = None
 
     def preflight_check(self) -> None:
         executable = shutil.which(self.command)
@@ -51,6 +54,7 @@ class ClaudeCliClassifier:
             )
 
     def classify(self, message: dict) -> Classification:
+        self.last_error = None
         prompt = (
             "Metadata-first: classify email metadata into one category: KEEP_IN_INBOX, "
             "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW. "
@@ -66,12 +70,16 @@ class ClaudeCliClassifier:
             data = safe_json_loads(sanitized, context="claude_cli.extracted_json", default={}, debug_json=self.debug_json)
             return Classification(**data)
         except Exception as exc:
+            self.last_error = str(exc)
             print(f"Claude CLI parsing error: {exc}; payload={truncate_payload(locals().get('text', ''))}")
+            reason = "Model response parsing failed"
+            if "timed out" in str(exc).lower():
+                reason = f"Claude timeout: {exc}"
             return Classification(
                 category="NEEDS_REVIEW",
                 target_folder="Inbox",
                 confidence=0.0,
-                reason="Model response parsing failed",
+                reason=reason,
                 needs_user_attention=True,
             )
 
@@ -95,6 +103,7 @@ class ClaudeCliClassifier:
         except Exception:
             return [self.classify(m) for m in messages]
     def _invoke_cli(self, prompt: str) -> str:
+        t0 = time.perf_counter()
         try:
             result = subprocess.run(
                 [self.command],
@@ -105,12 +114,15 @@ class ClaudeCliClassifier:
                 check=False,
             )
         except FileNotFoundError as exc:
+            self.last_latency_seconds = time.perf_counter() - t0
             raise RuntimeError(
                 f"Claude CLI not installed or not in PATH: '{self.command}'"
             ) from exc
         except subprocess.TimeoutExpired as exc:
+            self.last_latency_seconds = time.perf_counter() - t0
             raise RuntimeError(f"Claude CLI timed out after {self.timeout_seconds}s") from exc
 
+        self.last_latency_seconds = time.perf_counter() - t0
         stdout = result.stdout or ""
         stderr = result.stderr or ""
         if result.returncode != 0:

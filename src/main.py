@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--unread-only", action="store_true")
     p.add_argument("--include-direct-to-me", default="false")
     p.add_argument("--debug-json", action="store_true")
+    p.add_argument("--claude-timeout-seconds", type=int, default=None)
     return p
 
 
@@ -76,9 +77,10 @@ def main() -> int:
     include_direct_to_me = str_to_bool(args.include_direct_to_me)
     invite_mode = os.getenv("CALENDAR_INVITE_MODE", "tentative").strip().lower()
     workers = int(os.getenv("CLAUDE_WORKERS", "4"))
-    batch_size = int(os.getenv("CLAUDE_BATCH_SIZE", "4"))
+    batch_size = int(os.getenv("CLAUDE_BATCH_SIZE", "1"))
     my_email = os.getenv("USER_EMAIL", "")
     debug_pipeline = str_to_bool(os.getenv("DEBUG_PIPELINE", "false"))
+    claude_timeout_seconds = args.claude_timeout_seconds if args.claude_timeout_seconds is not None else int(os.getenv("CLAUDE_TIMEOUT_SECONDS", "180"))
 
     def dlog(msg: str) -> None:
         if debug_pipeline:
@@ -93,9 +95,9 @@ def main() -> int:
         client = OutlookClient(Path("scripts"))
     if backend == "claude_cli":
         try:
-            classifier = ClaudeCliClassifier(command=os.getenv("CLAUDE_CLI_COMMAND", "claude"), debug_json=args.debug_json)
+            classifier = ClaudeCliClassifier(command=os.getenv("CLAUDE_CLI_COMMAND", "claude"), timeout_seconds=claude_timeout_seconds, debug_json=args.debug_json)
         except TypeError:
-            classifier = ClaudeCliClassifier(command=os.getenv("CLAUDE_CLI_COMMAND", "claude"))
+            classifier = ClaudeCliClassifier(command=os.getenv("CLAUDE_CLI_COMMAND", "claude"), timeout_seconds=claude_timeout_seconds)
     else:
         classifier = BedrockClassifier(os.getenv("AWS_REGION"), os.getenv("BEDROCK_MODEL_ID"))
     run_preflight(client, classifier)

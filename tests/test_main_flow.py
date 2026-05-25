@@ -9,6 +9,7 @@ def test_parser_defaults():
     args = mainmod.build_parser().parse_args([])
     assert args.limit == 25
     assert args.max_body_preview_chars == 500
+    assert args.claude_timeout_seconds is None
 
 
 def test_low_confidence_forces_review(monkeypatch, tmp_path):
@@ -126,3 +127,65 @@ def test_all_direct_to_me_inbox(monkeypatch, tmp_path):
     monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
     monkeypatch.setattr("sys.argv", ["prog", "--dry-run"])
     assert mainmod.main() == 0
+
+
+def test_claude_defaults(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "scripts").mkdir()
+
+    class C:
+        def ensure_outlook_running(self):
+            pass
+        def list_inbox_messages(self, **kwargs):
+            return []
+        def list_folders(self):
+            return set()
+
+    captured = {}
+
+    class FakeClaude:
+        def __init__(self, command="claude", timeout_seconds=0, debug_json=False):
+            captured["timeout_seconds"] = timeout_seconds
+            captured["command"] = command
+        def preflight_check(self):
+            pass
+
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "claude_cli")
+    monkeypatch.setattr(mainmod, "OutlookClient", lambda *_args, **_kwargs: C())
+    monkeypatch.setattr(mainmod, "ClaudeCliClassifier", FakeClaude)
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
+    monkeypatch.setattr("sys.argv", ["prog", "--dry-run"])
+    assert mainmod.main() == 0
+    assert captured["timeout_seconds"] == 180
+
+
+def test_claude_timeout_override(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "scripts").mkdir()
+
+    class C:
+        def ensure_outlook_running(self):
+            pass
+        def list_inbox_messages(self, **kwargs):
+            return []
+        def list_folders(self):
+            return set()
+
+    captured = {}
+
+    class FakeClaude:
+        def __init__(self, command="claude", timeout_seconds=0, debug_json=False):
+            captured["timeout_seconds"] = timeout_seconds
+        def preflight_check(self):
+            pass
+
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "claude_cli")
+    monkeypatch.setenv("CLAUDE_TIMEOUT_SECONDS", "222")
+    monkeypatch.setattr(mainmod, "OutlookClient", lambda *_args, **_kwargs: C())
+    monkeypatch.setattr(mainmod, "ClaudeCliClassifier", FakeClaude)
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
+    monkeypatch.setattr("sys.argv", ["prog", "--dry-run", "--claude-timeout-seconds", "240"])
+    assert mainmod.main() == 0
+    assert captured["timeout_seconds"] == 240
