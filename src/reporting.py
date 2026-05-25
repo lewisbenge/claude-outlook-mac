@@ -21,6 +21,8 @@ class DecisionLog:
     confidence: float
     target_folder: str
     reason: str
+    parse_error: str
+    raw_response_preview: str
     needs_user_attention: bool
     action: str
 
@@ -41,6 +43,8 @@ class NormalizedResult:
     received_at: str = ""
     source_folder: str = ""
     reason: str = ""
+    parse_error: str = ""
+    raw_response_preview: str = ""
     needs_user_attention: bool = False
 
 
