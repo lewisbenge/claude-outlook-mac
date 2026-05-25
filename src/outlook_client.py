@@ -51,11 +51,10 @@ class OutlookClient:
     def ensure_outlook_running(self) -> None:
         self._run_script("outlook_ensure_running.applescript")
 
-    def preflight_permission_check(self) -> None:
+    def preflight_permission_check(self) -> PreflightReport:
         self.ensure_outlook_running()
         try:
-            self._run_script("outlook_list_folders.applescript")
-            self.list_folders()
+            folders = self.list_folders()
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or exc.stdout or str(exc)).strip()
             raise RuntimeError(
@@ -68,6 +67,20 @@ class OutlookClient:
             raise RuntimeError(
                 f"Outlook preflight failed while validating folder access: {exc}"
             ) from exc
+
+        report = PreflightReport(
+            automation_access="ok",
+            inbox_access="ok",
+            folder_enumeration="ok",
+            folder_create="unknown",
+            move_support="unknown",
+            warnings=[],
+            status="ok",
+        )
+        if not folders:
+            report.warnings.append("No Outlook folders were returned during preflight.")
+        self.preflight_report = report
+        return report
 
     def list_inbox_messages(self, limit: int = 50, max_body_preview_chars: int = 500, **_: object) -> list[OutlookMessage]:
         output = self._run_script("outlook_list_messages.applescript", str(limit), str(max_body_preview_chars))
