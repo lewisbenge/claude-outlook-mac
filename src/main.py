@@ -13,7 +13,7 @@ except ModuleNotFoundError:
 
 from src.bedrock_classifier import BedrockClassifier
 from src.claude_cli_classifier import ClaudeCliClassifier
-from src.cache import ProcessedCache
+from src.cache import ProcessedCache, compute_result_hash
 from src.folder_rules import FolderRuleConfig, choose_target_folder
 from src.outlook_client import OutlookClient
 from src.reporting import DecisionLog, NormalizedResult, write_csv_report, write_json_report
@@ -36,7 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-body-preview-chars", type=int, default=500)
     p.add_argument("--interactive-review", action="store_true")
     p.add_argument("--reset-cache", action="store_true")
+    p.add_argument("--reset-processed-cache", action="store_true")
     p.add_argument("--reset-db", action="store_true")
+    p.add_argument("--reprocess-all", action="store_true")
+    p.add_argument("--ignore-cache", action="store_true")
+    p.add_argument("--cache-ttl-hours", type=float, default=None)
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--confirm-apply", default="")
     p.add_argument("--since-days", type=int, default=30)
@@ -72,6 +76,8 @@ def _is_direct_to_me(message, my_email: str) -> bool:
 def main() -> int:
     load_dotenv()
     args = build_parser().parse_args()
+    if args.apply:
+        args.dry_run = False
     apply_enabled = os.getenv("ALLOW_APPLY", "false").lower() == "true"
     confidence_threshold = float(os.getenv("CONFIDENCE_THRESHOLD", "0.75"))
     include_direct_to_me = str_to_bool(args.include_direct_to_me)
@@ -118,8 +124,25 @@ def main() -> int:
     )
     metadata_store = OperationalMetadataStore(db_path)
     metrics = Metrics()
-    if args.reset_cache:
+    if args.reset_cache or args.reset_processed_cache:
         cache.reset()
+    print(f"[startup] processed_cache_entries={len(cache)}")
+    class_cache_entries = 0
+    try:
+        with class_cache._connect() as con:
+            class_cache_entries = int(con.execute("SELECT COUNT(*) FROM classification_cache").fetchone()[0])
+    except Exception:
+        class_cache_entries = 0
+    print(f"[startup] classification_cache_entries={class_cache_entries}")
+
+    classifier_logic_version = os.getenv("CLASSIFIER_LOGIC_VERSION", "1")
+    schema_version = str(migration_info["current_version"])
+    prompt_version = os.getenv("CLASSIFIER_PROMPT_VERSION", "1")
+    current_result_hash = compute_result_hash(
+        classifier_logic_version=classifier_logic_version,
+        schema_version=schema_version,
+        prompt_version=prompt_version,
+    )
     messages = client.list_inbox_messages(limit=args.limit, max_body_preview_chars=args.max_body_preview_chars, since_days=args.since_days, unread_only=args.unread_only)
     metrics.c["inbox_messages_retrieved"] = len(messages)
 
@@ -157,16 +180,19 @@ def main() -> int:
         )
     for m in messages:
         dlog(f"message_id={m.message_id} lifecycle=retrieved")
-        if cache.contains(m.message_id):
-            metrics.c["skipped_cached_processed"] += 1
-            dlog(f"message_id={m.message_id} lifecycle=skipped reason=already_processed_cache")
-            outcome_counts["skipped"] += 1
-            continue
+        can_use_processed_cache = not args.ignore_cache and not args.reprocess_all
+        if can_use_processed_cache and cache.contains(m.message_id, ttl_hours=args.cache_ttl_hours):
+            if cache.result_hash(m.message_id) != current_result_hash:
+                dlog(f"message_id={m.message_id} lifecycle=reprocess reason=result_hash_changed")
+            else:
+                metrics.c["skipped_cached_processed"] += 1
+                dlog(f"message_id={m.message_id} lifecycle=skipped reason=already_processed_cache")
+                outcome_counts["skipped"] += 1
+                continue
         if not include_direct_to_me and _is_direct_to_me(m, my_email):
             metrics.c["skipped_direct_to_me"] += 1
             dlog(f"message_id={m.message_id} lifecycle=skipped reason=direct_to_me include_direct_to_me={include_direct_to_me}")
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "KEEP_IN_INBOX", 1.0, "Inbox", "Directly addressed", "", "", True, "KEEP"))
-            cache.add(m.message_id)
             append_normalized(m, "KEEP_IN_INBOX", "KEEP", "Inbox", 1.0, "skipped", reason="Directly addressed", skip_reason="direct_to_me", needs_user_attention=True)
             outcome_counts["skipped"] += 1
             continue
@@ -185,7 +211,6 @@ def main() -> int:
             target = choose_target_folder(result.category, result.target_folder, folder_cfg)
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, getattr(result, "parse_error", "") or "", getattr(result, "raw_response_preview", "") or "", result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             metadata_store.store(m.message_id, meta, result)
-            cache.add(m.message_id)
             append_normalized(m, result.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, result.confidence, "heuristic", reason=result.reason, needs_user_attention=result.needs_user_attention)
             dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
             outcome_counts["heuristics"] += 1
@@ -197,7 +222,6 @@ def main() -> int:
             target = choose_target_folder(cached.category, cached.target_folder, folder_cfg)
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, cached.category, cached.confidence, target, "classification cache", "", "", False, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             metadata_store.store(m.message_id, meta, cached)
-            cache.add(m.message_id)
             append_normalized(m, cached.category, "KEEP" if target == "Inbox" else f"MOVE->{target}", target, cached.confidence, "cache_hit", reason="classification cache")
             dlog(f"message_id={m.message_id} lifecycle=final_action_generated action={'KEEP' if target == 'Inbox' else f'MOVE->{target}'}")
             outcome_counts["cache_hits"] += 1
@@ -230,9 +254,9 @@ def main() -> int:
             metrics.c["extracted_actions"] += 1
         if getattr(result, "priority", None):
             metrics.c["inferred_priorities"] += 1
-        cache.add(m.message_id)
 
     for d in decisions:
+        action_succeeded = True
         if d.target_folder != "Inbox" and d.category in {"MOVE_TO_PROJECT_FOLDER", "MOVE_TO_DELETE_FOLDER"} and args.apply:
             if d.target_folder not in existing_folders and apply_enabled:
                 client.create_folder(d.target_folder)
@@ -240,7 +264,9 @@ def main() -> int:
             try:
                 client.move_message(d.message_id, d.target_folder, apply_enabled=apply_enabled)
             except Exception:
-                pass
+                action_succeeded = False
+        if args.apply and not args.dry_run and action_succeeded and d.category != "FAILED":
+            cache.add(d.message_id, processing_mode="apply", result_hash=current_result_hash)
         if d.category in {"KEEP_IN_INBOX", "CALENDAR_INVITE"}:
             summary["kept_in_inbox"] += 1
         elif d.category == "MOVE_TO_PROJECT_FOLDER":

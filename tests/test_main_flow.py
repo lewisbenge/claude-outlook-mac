@@ -40,6 +40,7 @@ def test_low_confidence_forces_review(monkeypatch, tmp_path):
     monkeypatch.setattr(mainmod, "BedrockClassifier", lambda *_: B())
     monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
     monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr(mainmod.ClassificationCache, "lookup", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("sys.argv", ["prog", "--dry-run"])
     assert mainmod.main() == 0
 
@@ -189,3 +190,149 @@ def test_claude_timeout_override(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", ["prog", "--dry-run", "--claude-timeout-seconds", "240"])
     assert mainmod.main() == 0
     assert captured["timeout_seconds"] == 240
+
+
+def test_dry_run_does_not_suppress_reruns(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    calls = {"n": 0}
+
+    class C:
+        def ensure_outlook_running(self):
+            pass
+        def list_inbox_messages(self, **kwargs):
+            return [SimpleNamespace(message_id="1", subject="s", sender="a@example.com", recipients="", cc="", received_at="now", folder="Inbox", body_preview="bp")]
+        def list_folders(self):
+            return set()
+
+    class B:
+        def classify(self, _):
+            calls["n"] += 1
+            return SimpleNamespace(category="KEEP_IN_INBOX", target_folder="Inbox", confidence=0.99, reason="ok", needs_user_attention=False)
+
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "bedrock")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
+    monkeypatch.setattr(mainmod, "OutlookClient", lambda *_: C())
+    monkeypatch.setattr(mainmod, "BedrockClassifier", lambda *_: B())
+    monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr(mainmod.ClassificationCache, "lookup", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("sys.argv", ["prog", "--dry-run"])
+    assert mainmod.main() == 0
+    monkeypatch.setattr("sys.argv", ["prog", "--dry-run"])
+    assert mainmod.main() == 0
+    assert calls["n"] == 2
+
+
+def test_apply_mode_suppresses_subsequent_run(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    calls = {"n": 0}
+
+    class C:
+        def ensure_outlook_running(self):
+            pass
+        def list_inbox_messages(self, **kwargs):
+            return [SimpleNamespace(message_id="1", subject="s", sender="a@example.com", recipients="", cc="", received_at="now", folder="Inbox", body_preview="bp")]
+        def list_folders(self):
+            return {"AI Sorted"}
+        def create_folder(self, *_args, **_kwargs):
+            return None
+        def move_message(self, *_args, **_kwargs):
+            return None
+
+    class B:
+        def classify(self, _):
+            calls["n"] += 1
+            return SimpleNamespace(category="MOVE_TO_DELETE_FOLDER", target_folder="AI Sorted/Delete", confidence=0.99, reason="junk", needs_user_attention=False)
+
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "bedrock")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
+    monkeypatch.setenv("ALLOW_APPLY", "true")
+    monkeypatch.setattr(mainmod, "OutlookClient", lambda *_: C())
+    monkeypatch.setattr(mainmod, "BedrockClassifier", lambda *_: B())
+    monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS"])
+    assert mainmod.main() == 0
+    monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS"])
+    assert mainmod.main() == 0
+    assert calls["n"] == 1
+
+
+def test_ignore_cache_forces_reprocessing(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    calls = {"n": 0}
+
+    class C:
+        def ensure_outlook_running(self):
+            pass
+        def list_inbox_messages(self, **kwargs):
+            return [SimpleNamespace(message_id="1", subject="s", sender="a@example.com", recipients="", cc="", received_at="now", folder="Inbox", body_preview="bp")]
+        def list_folders(self):
+            return {"AI Sorted"}
+        def create_folder(self, *_args, **_kwargs):
+            return None
+        def move_message(self, *_args, **_kwargs):
+            return None
+
+    class B:
+        def classify(self, _):
+            calls["n"] += 1
+            return SimpleNamespace(category="MOVE_TO_DELETE_FOLDER", target_folder="AI Sorted/Delete", confidence=0.99, reason="junk", needs_user_attention=False)
+
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "bedrock")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
+    monkeypatch.setenv("ALLOW_APPLY", "true")
+    monkeypatch.setattr(mainmod, "OutlookClient", lambda *_: C())
+    monkeypatch.setattr(mainmod, "BedrockClassifier", lambda *_: B())
+    monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr(mainmod.ClassificationCache, "lookup", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS"])
+    assert mainmod.main() == 0
+    monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS", "--ignore-cache"])
+    assert mainmod.main() == 0
+    assert calls["n"] == 2
+
+
+def test_cache_ttl_expiry(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    calls = {"n": 0}
+
+    class C:
+        def ensure_outlook_running(self):
+            pass
+        def list_inbox_messages(self, **kwargs):
+            return [SimpleNamespace(message_id="1", subject="s", sender="a@example.com", recipients="", cc="", received_at="now", folder="Inbox", body_preview="bp")]
+        def list_folders(self):
+            return {"AI Sorted"}
+        def create_folder(self, *_args, **_kwargs):
+            return None
+        def move_message(self, *_args, **_kwargs):
+            return None
+
+    class B:
+        def classify(self, _):
+            calls["n"] += 1
+            return SimpleNamespace(category="MOVE_TO_DELETE_FOLDER", target_folder="AI Sorted/Delete", confidence=0.99, reason="junk", needs_user_attention=False)
+
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "bedrock")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
+    monkeypatch.setenv("ALLOW_APPLY", "true")
+    monkeypatch.setattr(mainmod, "OutlookClient", lambda *_: C())
+    monkeypatch.setattr(mainmod, "BedrockClassifier", lambda *_: B())
+    monkeypatch.setattr(mainmod, "load_dotenv", lambda: None)
+    monkeypatch.setattr(mainmod, "run_preflight", lambda *_: None)
+    monkeypatch.setattr(mainmod.ClassificationCache, "lookup", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS"])
+    assert mainmod.main() == 0
+    monkeypatch.setattr("sys.argv", ["prog", "--apply", "--confirm-apply", "MOVE_EMAILS", "--cache-ttl-hours", "0"])
+    assert mainmod.main() == 0
+    assert calls["n"] == 2
