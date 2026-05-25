@@ -25,6 +25,10 @@ class DecisionLog:
     raw_response_preview: str
     needs_user_attention: bool
     action: str
+    decision_source: str = ""
+    matched_rule: str = ""
+    matched_pattern: str = ""
+    protected_sender: bool = False
 
 
 @dataclass
@@ -46,6 +50,10 @@ class NormalizedResult:
     parse_error: str = ""
     raw_response_preview: str = ""
     needs_user_attention: bool = False
+    decision_source: str = ""
+    matched_rule: str = ""
+    matched_pattern: str = ""
+    protected_sender: bool = False
 
 
 def write_json_report(decisions: Iterable[DecisionLog], output_path: Path) -> None:
