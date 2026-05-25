@@ -123,3 +123,23 @@ def test_sqlite_migrations_are_idempotent(tmp_path):
     second = c.migrate()
     assert first["current_version"] >= 1
     assert second["migrations_applied"] == []
+
+
+def test_flight_reminder_routes_to_travel():
+    out = heuristic_classify({"subject": "Flight reminder: boarding pass", "sender": "noreply@airline.com", "body_preview": ""}, "tentative")
+    assert out is not None
+    assert out.classification.category == "TRAVEL"
+
+
+def test_calendar_recurring_invite_routes_to_calendar():
+    out = heuristic_classify({"subject": "Weekly calendar invite", "sender": "calendar@corp.com", "body_preview": "Teams meeting"}, "tentative")
+    assert out is not None
+    assert out.classification.category == "CALENDAR_INVITE"
+
+
+def test_unrelated_email_does_not_inherit_project_from_sender_cache(tmp_path):
+    c = ClassificationCache(tmp_path / "c.sqlite")
+    c.store("person@example.com", "AUS growth status", Classification("MOVE_TO_PROJECT_FOLDER", "AUS_Growth", 0.95, "x", False))
+    got = c.lookup("person@example.com", "Dinner plans")
+    assert got is not None
+    assert got.category == "NEEDS_REVIEW"

@@ -24,8 +24,15 @@ LOW_VALUE_PATTERNS = [
     re.compile(r"github|pull request|issue", re.I),
     re.compile(r"build failed|ci|cd|pipeline", re.I),
 ]
+OPERATIONAL_ROUTING_RULES = [
+    ("TRAVEL", "travel_signal", re.compile(r"flight|itinerary|boarding pass|airline|trip|travel", re.I), "Travel"),
+    ("TRAVEL", "lodging_transport", re.compile(r"hotel|reservation|booking confirmation|rental car|car hire", re.I), "Travel"),
+    ("CALENDAR_INVITE", "calendar_signal", re.compile(r"calendar invite|invitation|meeting accepted|meeting declined|teams meeting|zoom meeting", re.I), "Calendar"),
+    ("FINANCE", "finance_signal", re.compile(r"expense|receipt|invoice|billing|payment due|reimbursement", re.I), "Finance"),
+    ("MOVE_TO_DELETE_FOLDER", "newsletter_signal", re.compile(r"newsletter|digest|unsubscribe", re.I), "Delete"),
+]
 CUSTOMER_SAFETY_PATTERNS = [
-    re.compile(r"rico|anduril|capability|sec|official|customer|briefing|meeting|proposal|mnd|army", re.I),
+    re.compile(r"rico|anduril|capability|sec|official|customer|briefing|proposal|mnd|army", re.I),
 ]
 STRONG_DELETE_RULES = [
     ("noreply_sender", "sender", re.compile(r"noreply|do-not-reply|no-reply", re.I)),
@@ -44,6 +51,10 @@ INVITE_PATTERNS = [
 class TriageOutcome:
     classification: Classification
     source: str
+    routing_source: str = ""
+    inherited_from_thread: bool = False
+    inherited_from_sender: bool = False
+    heuristic_match: str = ""
 
 
 class ClassificationCache:
@@ -154,11 +165,28 @@ class ClassificationCache:
             try:
                 for key in keys:
                     row = con.execute(
-                        "SELECT category,target_folder,confidence FROM classification_cache WHERE key=?",
+                        "SELECT category,target_folder,confidence,updated_at FROM classification_cache WHERE key=?",
                         (key,),
                     ).fetchone()
                     if row:
-                        return Classification(category=row[0], target_folder=row[1], confidence=float(row[2]), reason="cache hit", needs_user_attention=False)
+                        age_days = con.execute("SELECT CAST((julianday('now') - julianday(?)) AS REAL)", (row[3],)).fetchone()[0] or 0.0
+                        decay = max(0.35, 1.0 - min(float(age_days), 60.0) * 0.01)
+                        inherited_from_thread = key.startswith("thread:")
+                        inherited_from_sender = key.startswith("sender:") or key.startswith("domain:")
+                        confidence = float(row[2]) * decay
+                        category = row[0]
+                        target_folder = row[1]
+                        if inherited_from_sender and category == "MOVE_TO_PROJECT_FOLDER":
+                            category = "NEEDS_REVIEW"
+                            target_folder = "Inbox"
+                            confidence *= 0.6
+                        return Classification(
+                            category=category,
+                            target_folder=target_folder,
+                            confidence=confidence,
+                            reason=f"cache hit; routing_source={key}; inherited_from_thread={inherited_from_thread}; inherited_from_sender={inherited_from_sender}; decay={decay:.2f}",
+                            needs_user_attention=False,
+                        )
             except sqlite3.OperationalError:
                 self.migrate()
         return None
@@ -333,24 +361,31 @@ def heuristic_classify(message: dict, invite_mode: str) -> TriageOutcome | None:
             f"| protected_reason={is_protected or 'none'}"
         )
 
-    if any(p.search(combined) for p in INVITE_PATTERNS):
-        return TriageOutcome(
-            Classification("CALENDAR_INVITE", "Inbox", 0.99, explain(f"Invite detected; mode={invite_mode}", "invite", "meeting/invite", "subject_or_body", protected_reason), False),
-            "heuristic",
-        )
-
     for p in CUSTOMER_SAFETY_PATTERNS:
         if p.search(subject):
             return TriageOutcome(
                 Classification("NEEDS_REVIEW", "Inbox", 0.8, explain("Customer-safety override", "customer_safety_override", p.pattern, "subject", protected_reason), True),
                 "heuristic",
+                routing_source="customer_guard",
+                heuristic_match="customer_safety_override",
             )
 
     if protected_reason:
         return TriageOutcome(
             Classification("NEEDS_REVIEW", "Inbox", 0.85, explain("Protected sender/domain", "protected_sender_domain", protected_reason, "sender", protected_reason), True),
             "heuristic",
+            routing_source="protected_sender_domain",
+            inherited_from_sender=True,
+            heuristic_match="protected_sender_domain",
         )
+    for klass, rule_name, pat, folder in OPERATIONAL_ROUTING_RULES:
+        if pat.search(combined):
+            return TriageOutcome(
+                Classification(klass, folder, 0.99, explain("Operational deterministic routing", rule_name, pat.pattern, "subject_or_body", protected_reason), False),
+                "heuristic",
+                routing_source="operational",
+                heuristic_match=rule_name,
+            )
 
     for rule_name, field, pat in STRONG_DELETE_RULES:
         haystack = sender if field == "sender" else f"{subject} {body_preview}"
@@ -358,6 +393,8 @@ def heuristic_classify(message: dict, invite_mode: str) -> TriageOutcome | None:
             return TriageOutcome(
                 Classification("MOVE_TO_DELETE_FOLDER", "AI Sorted/Delete", 0.98, explain("Heuristic low-value email", rule_name, pat.pattern, field, protected_reason), False),
                 "heuristic",
+                routing_source="heuristic_delete",
+                heuristic_match=rule_name,
             )
 
     if any(p.search(combined) for p in LOW_VALUE_PATTERNS):

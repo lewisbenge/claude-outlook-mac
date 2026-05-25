@@ -81,6 +81,7 @@ def main() -> int:
         args.dry_run = False
     apply_enabled = os.getenv("ALLOW_APPLY", "false").lower() == "true"
     confidence_threshold = float(os.getenv("CONFIDENCE_THRESHOLD", "0.75"))
+    project_confidence_threshold = float(os.getenv("PROJECT_CONFIDENCE_THRESHOLD", str(confidence_threshold)))
     include_direct_to_me = str_to_bool(args.include_direct_to_me)
     invite_mode = os.getenv("CALENDAR_INVITE_MODE", "tentative").strip().lower()
     workers = int(os.getenv("CLAUDE_WORKERS", "4"))
@@ -157,14 +158,29 @@ def main() -> int:
     pending_messages = []
     outcome_counts = {"skipped": 0, "heuristics": 0, "cache_hits": 0, "classified": 0, "failed": 0}
     explain_re = re.compile(r"(matched_rule|matched_pattern|protected_reason)=([^|]+)")
+    source_re = re.compile(r"routing_source=([^;|]+)|inherited_from_thread=(True|False)|inherited_from_sender=(True|False)")
 
     def parse_reason_fields(reason: str) -> tuple[str, str, bool]:
         vals = {k: v.strip() for k, v in explain_re.findall(reason or "")}
         protected = (vals.get("protected_reason", "none").lower() != "none")
         return vals.get("matched_rule", ""), vals.get("matched_pattern", ""), protected
 
-    def append_normalized(message, classification: str, action: str, target_folder: str, confidence: float, status: str, reason: str = "", skip_reason: str = "", needs_user_attention: bool = False, parse_error: str = "", raw_response_preview: str = "", decision_source: str = "") -> None:
+    def parse_routing_fields(reason: str) -> tuple[str, bool, bool]:
+        routing_source = ""
+        inherited_thread = False
+        inherited_sender = False
+        for a, b, c in source_re.findall(reason or ""):
+            if a:
+                routing_source = a.strip()
+            if b:
+                inherited_thread = b == "True"
+            if c:
+                inherited_sender = c == "True"
+        return routing_source, inherited_thread, inherited_sender
+
+    def append_normalized(message, classification: str, action: str, target_folder: str, confidence: float, status: str, reason: str = "", skip_reason: str = "", needs_user_attention: bool = False, parse_error: str = "", raw_response_preview: str = "", decision_source: str = "", inferred_project: str = "", heuristic_match: str = "") -> None:
         mr, mp, ps = parse_reason_fields(reason)
+        routing_source, inherited_thread, inherited_sender = parse_routing_fields(reason)
         normalized_results.append(
             NormalizedResult(
                 message_id=message.message_id,
@@ -188,6 +204,12 @@ def main() -> int:
                 matched_rule=mr,
                 matched_pattern=mp,
                 protected_sender=ps,
+                inferred_project=inferred_project,
+                routing_confidence=confidence,
+                routing_source=routing_source,
+                inherited_from_thread=inherited_thread,
+                inherited_from_sender=inherited_sender,
+                heuristic_match=heuristic_match or mr,
             )
         )
     for m in messages:
@@ -230,6 +252,9 @@ def main() -> int:
             continue
         cached = class_cache.lookup(m.sender, m.subject)
         if cached and cached.confidence >= confidence_threshold:
+            if cached.category == "MOVE_TO_PROJECT_FOLDER" and cached.confidence < project_confidence_threshold:
+                cached.category = "NEEDS_REVIEW"
+                cached.target_folder = "Inbox"
             metrics.c["cache_hits"] += 1
             dlog(f"message_id={m.message_id} lifecycle=cache_classification category={cached.category} confidence={cached.confidence}")
             target = choose_target_folder(cached.category, cached.target_folder, folder_cfg)
@@ -250,6 +275,8 @@ def main() -> int:
         meta = enrich_deterministic_meta({"subject": m.subject, "sender": m.sender, "recipients": m.recipients, "cc": m.cc, "received_at": m.received_at, "folder": m.folder, "body_preview": "" if args.no_body_preview else m.body_preview[:args.max_body_preview_chars]})
         target = choose_target_folder(result.category, result.target_folder, folder_cfg)
         if result.confidence < confidence_threshold:
+            result.category, target = "NEEDS_REVIEW", "Inbox"
+        if result.category == "MOVE_TO_PROJECT_FOLDER" and result.confidence < project_confidence_threshold:
             result.category, target = "NEEDS_REVIEW", "Inbox"
         dlog(f"message_id={m.message_id} lifecycle=final_classification category={result.category} confidence={result.confidence}")
         class_cache.store(m.sender, m.subject, result)

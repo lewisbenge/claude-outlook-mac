@@ -61,8 +61,10 @@ class ClaudeCliClassifier:
     def classify(self, message: dict) -> Classification:
         self.last_error = None
         prompt = (
-            "Metadata-first: classify email metadata into one category: KEEP_IN_INBOX, "
-            "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW. "
+            "Metadata-first. First classify intent into one of: PROJECT,CUSTOMER,TRAVEL,CALENDAR,ADMIN,FINANCE,NEWSLETTER,AUTOMATION,PERSONAL,UNKNOWN. "
+            "Operational/admin/travel beats project inference. Do not overuse prior project memory. Infer project only with strong evidence. "
+            "Negative examples: Flight booking != project. Calendar reminder != project. Generic corporate announcement != project. "
+            "Then choose category: KEEP_IN_INBOX, MOVE_TO_PROJECT_FOLDER, MOVE_TO_CUSTOMER_FOLDER, MOVE_TO_DELETE_FOLDER, MOVE_TO_TRAVEL_FOLDER, MOVE_TO_CALENDAR_FOLDER, MOVE_TO_FINANCE_FOLDER, MOVE_TO_NEWSLETTER_FOLDER, NEEDS_REVIEW. "
             "Output format is strict and mandatory: output must start with BEGIN_JSON on its own line, "
             "then exactly one JSON object with keys: category,target_folder,confidence,reason,needs_user_attention,project,organization,stakeholders,action_required,priority,topics,meeting_related,contains_decision,contains_tasking,short_summary, "
             "then END_JSON on its own line. No markdown. No explanation. No extra text. "

@@ -29,6 +29,12 @@ class DecisionLog:
     matched_rule: str = ""
     matched_pattern: str = ""
     protected_sender: bool = False
+    inferred_project: str = ""
+    routing_confidence: float = 0.0
+    routing_source: str = ""
+    inherited_from_thread: bool = False
+    inherited_from_sender: bool = False
+    heuristic_match: str = ""
 
 
 @dataclass
@@ -54,6 +60,12 @@ class NormalizedResult:
     matched_rule: str = ""
     matched_pattern: str = ""
     protected_sender: bool = False
+    inferred_project: str = ""
+    routing_confidence: float = 0.0
+    routing_source: str = ""
+    inherited_from_thread: bool = False
+    inherited_from_sender: bool = False
+    heuristic_match: str = ""
 
 
 def write_json_report(decisions: Iterable[DecisionLog], output_path: Path) -> None:
