@@ -112,3 +112,49 @@ After each run, inspect:
 - `reports/dry_run_report.csv`
 
 Validate proposed moves before enabling `--apply`.
+
+## Desktop foundation (Tauri + React + local Python agent)
+
+This repository now includes a **local-first desktop scaffold** without replacing the existing inbox engine.
+
+### Added architecture layers
+
+- `desktop-ui/`: Tauri v2 + React/TypeScript shell (chat/task/inbox sidebar UX).
+- `src/desktop_api.py`: local IPC/API (HTTP on `127.0.0.1:8765`) for frontend-to-agent communication.
+- `src/ops_service.py`: tool-driven runtime with:
+  - tool registry (`inbox_triage`, `classify_email`, `move_email`, `create_folder`, `tentative_calendar_response`, `generate_digest`)
+  - task orchestration primitives (queued/running/completed)
+  - streaming events model scaffold (`/events` SSE)
+  - operational memory expansion in SQLite (`thread_memory` metadata)
+
+### Safety guarantees preserved
+
+The original constraints are unchanged:
+- never delete messages
+- never send/reply/forward
+- never mark read
+- non-Inbox sorting remains under `AI Sorted/...`
+- `apply` still requires explicit user intent
+- interactive review workflow remains compatible with existing CLI pipeline
+
+### Developer setup (desktop foundation)
+
+1. Install Python deps:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Start local backend service:
+   ```bash
+   python -m src.desktop_api
+   ```
+3. In another terminal, run desktop frontend:
+   ```bash
+   cd desktop-ui
+   npm install
+   npm run tauri dev
+   ```
+
+### Notes
+
+- This is a **foundation** for future MCP/tool capability exposure, not a full MCP implementation.
+- Existing `python -m src.main` inbox-cleaning flow is intentionally retained.

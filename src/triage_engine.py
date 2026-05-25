@@ -165,7 +165,7 @@ class OperationalMetadataStore:
 
     def store(self, message_id: str, metadata: dict, cls: Classification):
         with self._connect() as con:
-            project_id = self._upsert_project(con, cls.project)
+            project_id = self._upsert_project(con, getattr(cls, "project", None))
             con.execute(
                 """INSERT OR REPLACE INTO email_metadata(
                     message_id,thread_key,sender,sender_domain,recurring_thread,calendar_invite,source_system,project_id,organization,
@@ -180,17 +180,17 @@ class OperationalMetadataStore:
                     int(bool(metadata.get("calendar_invite"))),
                     metadata.get("source_system"),
                     project_id,
-                    cls.organization,
-                    None if cls.action_required is None else int(bool(cls.action_required)),
-                    cls.priority,
-                    str(cls.topics or []),
-                    None if cls.meeting_related is None else int(bool(cls.meeting_related)),
-                    None if cls.contains_decision is None else int(bool(cls.contains_decision)),
-                    None if cls.contains_tasking is None else int(bool(cls.contains_tasking)),
-                    cls.short_summary,
+                    getattr(cls, "organization", None),
+                    None if getattr(cls, "action_required", None) is None else int(bool(getattr(cls, "action_required", None))),
+                    getattr(cls, "priority", None),
+                    str(getattr(cls, "topics", []) or []),
+                    None if getattr(cls, "meeting_related", None) is None else int(bool(getattr(cls, "meeting_related", None))),
+                    None if getattr(cls, "contains_decision", None) is None else int(bool(getattr(cls, "contains_decision", None))),
+                    None if getattr(cls, "contains_tasking", None) is None else int(bool(getattr(cls, "contains_tasking", None))),
+                    getattr(cls, "short_summary", None),
                 ),
             )
-            for s in (cls.stakeholders or []):
+            for s in (getattr(cls, "stakeholders", []) or []):
                 sid = self._upsert_stakeholder(con, s)
                 if sid:
                     con.execute("INSERT OR IGNORE INTO email_stakeholders(message_id, stakeholder_id) VALUES(?,?)", (message_id, sid))
