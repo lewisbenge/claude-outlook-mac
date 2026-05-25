@@ -286,9 +286,13 @@ class Metrics:
         self.c["total_claude_calls"] += 1
         self.latencies.append(latency)
 
+    def record_timeout(self):
+        self.c["claude_timeouts"] += 1
+
     def as_dict(self):
         avg = sum(self.latencies) / len(self.latencies) if self.latencies else 0.0
         out = dict(self.c)
+        out["claude_average_latency"] = round(avg, 3)
         out["average_latency"] = round(avg, 3)
         return out
 
@@ -316,7 +320,10 @@ def classify_batch(classifier, metas: Iterable[dict], workers: int, batch_size: 
         t0 = time.perf_counter()
         try:
             r = classifier.classify(meta)
-            metrics.record_call(time.perf_counter() - t0)
+            latency = getattr(classifier, "last_latency_seconds", None)
+            metrics.record_call(latency if latency is not None else (time.perf_counter() - t0))
+            if r.category == "NEEDS_REVIEW" and "timeout" in (r.reason or "").lower():
+                metrics.record_timeout()
             metrics.c["classifier_completed"] += 1
             return idx, r
         except Exception as exc:

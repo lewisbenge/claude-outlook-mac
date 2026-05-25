@@ -59,6 +59,28 @@ python -m src.main --dry-run
 Preflight validates the CLI executable and runs a lightweight JSON probe prompt.
 If auth is expired, run `claude login` and retry.
 
+
+### Claude CLI tuning
+
+For slower or larger prompts, tune timeout and batching:
+
+```bash
+export CLAUDE_TIMEOUT_SECONDS=180
+export CLAUDE_BATCH_SIZE=1
+python -m src.main --dry-run --no-body-preview
+```
+
+- `CLAUDE_TIMEOUT_SECONDS` (default `180`) controls per-call Claude CLI timeout.
+- `CLAUDE_BATCH_SIZE` (default `1`) is the safest Claude CLI concurrency chunking default.
+- `--no-body-preview` reduces payload size and can lower timeout risk.
+
+You can also override timeout on a single run:
+
+```bash
+python -m src.main --dry-run --claude-timeout-seconds 240
+```
+
+
 ## Bedrock model configuration
 
 When using Bedrock, set `CLASSIFIER_BACKEND=bedrock` and configure model invocation:
