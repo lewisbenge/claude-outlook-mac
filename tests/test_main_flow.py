@@ -31,6 +31,7 @@ def test_low_confidence_forces_review(monkeypatch, tmp_path):
         def classify(self, _):
             return SimpleNamespace(category="MOVE_TO_PROJECT_FOLDER", target_folder="X", confidence=0.1, reason="low", needs_user_attention=True)
 
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "bedrock")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
     monkeypatch.setenv("CONFIDENCE_THRESHOLD", "0.8")
@@ -65,6 +66,7 @@ def test_apply_disabled_safety(monkeypatch, tmp_path):
         def classify(self, _):
             return SimpleNamespace(category="MOVE_TO_DELETE_FOLDER", target_folder="Delete", confidence=0.99, reason="junk", needs_user_attention=False)
 
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "bedrock")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
     monkeypatch.setenv("ALLOW_APPLY", "false")
@@ -90,6 +92,7 @@ def test_run_preflight_rejects_missing_preflight_report(monkeypatch, tmp_path):
         def preflight_check(self):
             pass
 
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "bedrock")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("BEDROCK_MODEL_ID", "m")
     with pytest.raises(RuntimeError, match="no preflight report was returned"):

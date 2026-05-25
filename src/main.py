@@ -12,6 +12,7 @@ except ModuleNotFoundError:
         return
 
 from src.bedrock_classifier import BedrockClassifier
+from src.claude_cli_classifier import ClaudeCliClassifier
 from src.cache import ProcessedCache
 from src.folder_rules import FolderRuleConfig, choose_target_folder
 from src.outlook_client import OutlookClient, OutlookSafetyError
@@ -46,7 +47,7 @@ def str_to_bool(value: str | bool | None) -> bool:
 
 
 
-def run_preflight(client: OutlookClient, classifier: BedrockClassifier) -> None:
+def run_preflight(client: OutlookClient, classifier) -> None:
     report = client.preflight_permission_check()
     if report is None:
         raise RuntimeError("Outlook preflight failed: no preflight report was returned")
@@ -61,8 +62,6 @@ def run_preflight(client: OutlookClient, classifier: BedrockClassifier) -> None:
     )
     for warning in report.warnings:
         print(f"WARNING: {warning}")
-    if not os.getenv("AWS_REGION") or not os.getenv("BEDROCK_MODEL_ID"):
-        raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID")
     Path("reports").mkdir(parents=True, exist_ok=True)
     testfile = Path("reports/.write_test")
     testfile.write_text("ok", encoding="utf-8")
@@ -88,20 +87,30 @@ def main() -> int:
     if args.apply and args.confirm_apply != "MOVE_EMAILS":
         raise RuntimeError('For --apply you must pass --confirm-apply "MOVE_EMAILS" exactly.')
 
-    region = os.getenv("AWS_REGION")
-    model_id = os.getenv("BEDROCK_MODEL_ID")
-    inference_profile_arn = os.getenv("BEDROCK_INFERENCE_PROFILE_ARN")
-    if not region or not model_id:
-        raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID")
+    backend = os.getenv("CLASSIFIER_BACKEND", "claude_cli").strip().lower()
+    claude_command = os.getenv("CLAUDE_CLI_COMMAND", "claude")
 
     try:
         client = OutlookClient(Path("scripts"), debug_json=args.debug_json)
     except TypeError:
         client = OutlookClient(Path("scripts"))
-    try:
-        classifier = BedrockClassifier(region, model_id, inference_profile_arn=inference_profile_arn, debug_json=args.debug_json)
-    except TypeError:
-        classifier = BedrockClassifier(region, model_id)
+    if backend == "claude_cli":
+        try:
+            classifier = ClaudeCliClassifier(command=claude_command, debug_json=args.debug_json)
+        except TypeError:
+            classifier = ClaudeCliClassifier(command=claude_command)
+    elif backend == "bedrock":
+        region = os.getenv("AWS_REGION")
+        model_id = os.getenv("BEDROCK_MODEL_ID")
+        inference_profile_arn = os.getenv("BEDROCK_INFERENCE_PROFILE_ARN")
+        if not region or not model_id:
+            raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID for CLASSIFIER_BACKEND=bedrock")
+        try:
+            classifier = BedrockClassifier(region, model_id, inference_profile_arn=inference_profile_arn, debug_json=args.debug_json)
+        except TypeError:
+            classifier = BedrockClassifier(region, model_id)
+    else:
+        raise RuntimeError("CLASSIFIER_BACKEND must be one of: claude_cli, bedrock")
     run_preflight(client, classifier)
     if args.preflight_only:
         print("Preflight OK")

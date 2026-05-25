@@ -1,6 +1,6 @@
-# Outlook for Mac Local-First Inbox Triage (AWS Bedrock Claude)
+# Outlook for Mac Local-First Inbox Triage (Claude CLI + Optional AWS Bedrock)
 
-This tool classifies Inbox mail using AWS Bedrock Claude and moves messages with Outlook for Mac automation (`osascript` + AppleScript). It does not use Microsoft Graph or app registration.
+This tool classifies Inbox mail using Claude CLI (default) or AWS Bedrock (optional), and moves messages with Outlook for Mac automation (`osascript` + AppleScript). It does not use Microsoft Graph or app registration.
 
 ## Why Graph API is not used
 
@@ -18,6 +18,7 @@ Enterprise constraints can block app registration/token issuance. This project a
 
 - `src/main.py`
 - `src/outlook_client.py`
+- `src/claude_cli_classifier.py`
 - `src/bedrock_classifier.py`
 - `src/folder_rules.py`
 - `src/reporting.py`
@@ -31,7 +32,7 @@ Enterprise constraints can block app registration/token issuance. This project a
 1. Install Python 3.11+
 2. Install dependencies:
    ```bash
-   pip install boto3 pytest
+   pip install pytest python-dotenv
    ```
 3. Copy `.env.example` to `.env` and fill values.
 4. Configure AWS credentials for Bedrock (`aws configure` or environment variables).
@@ -44,11 +45,26 @@ Enterprise constraints can block app registration/token issuance. This project a
 3. If blocked, remove permissions and rerun to re-prompt.
 
 
-## Bedrock model configuration
 
-Use `BEDROCK_MODEL_ID` for direct on-demand model invocation:
+## Classifier backend configuration
+
+Default backend is Claude CLI:
 
 ```bash
+export CLASSIFIER_BACKEND=claude_cli
+export CLAUDE_CLI_COMMAND=claude
+python -m src.main --dry-run
+```
+
+Preflight validates the CLI executable and runs a lightweight JSON probe prompt.
+If auth is expired, run `claude login` and retry.
+
+## Bedrock model configuration
+
+When using Bedrock, set `CLASSIFIER_BACKEND=bedrock` and configure model invocation:
+
+```bash
+export CLASSIFIER_BACKEND=bedrock
 export AWS_REGION=us-east-1
 export BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
 python -m src.main --dry-run
