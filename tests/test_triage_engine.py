@@ -30,6 +30,31 @@ def test_heuristic_returns_none_when_no_match():
     assert out is None
 
 
+def test_customer_email_weak_signal_not_deleted():
+    out = heuristic_classify({"subject": "Capability planning notes", "sender": "person@vendor.com", "body_preview": "weekly update"}, "tentative")
+    assert out is not None
+    assert out.classification.category == "NEEDS_REVIEW"
+
+
+def test_protected_domain_not_deleted(monkeypatch):
+    monkeypatch.setenv("CUSTOMER_DOMAINS", "customer.com")
+    out = heuristic_classify({"subject": "Weekly digest", "sender": "noreply@customer.com", "body_preview": ""}, "tentative")
+    assert out is not None
+    assert out.classification.category == "NEEDS_REVIEW"
+
+
+def test_noreply_marketing_still_deletes():
+    out = heuristic_classify({"subject": "unsubscribe now", "sender": "noreply@news.com", "body_preview": ""}, "tentative")
+    assert out is not None
+    assert out.classification.category == "MOVE_TO_DELETE_FOLDER"
+
+
+def test_salesforce_noise_still_deletes():
+    out = heuristic_classify({"subject": "Salesforce notification", "sender": "bot@crm.com", "body_preview": "automated alert"}, "tentative")
+    assert out is not None
+    assert out.classification.category == "MOVE_TO_DELETE_FOLDER"
+
+
 def test_classify_batch_worker_exception_handling():
     class C:
         def classify(self, meta):

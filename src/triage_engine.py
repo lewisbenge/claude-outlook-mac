@@ -4,6 +4,7 @@ import re
 import sqlite3
 import threading
 import time
+import os
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -22,6 +23,16 @@ LOW_VALUE_PATTERNS = [
     re.compile(r"alert|notification|automated", re.I),
     re.compile(r"github|pull request|issue", re.I),
     re.compile(r"build failed|ci|cd|pipeline", re.I),
+]
+CUSTOMER_SAFETY_PATTERNS = [
+    re.compile(r"rico|anduril|capability|sec|official|customer|briefing|meeting|proposal|mnd|army", re.I),
+]
+STRONG_DELETE_RULES = [
+    ("noreply_sender", "sender", re.compile(r"noreply|do-not-reply|no-reply", re.I)),
+    ("marketing_unsubscribe", "subject_or_body", re.compile(r"unsubscribe|newsletter|digest", re.I)),
+    ("known_automation", "subject_or_body", re.compile(r"salesforce|sfdc|automated|alert|notification", re.I)),
+    ("sales_outreach", "subject_or_body", re.compile(r"sales\s+outreach|quick\s+question|discount|offer|promo|sale", re.I)),
+    ("spam_like", "subject_or_body", re.compile(r"free money|crypto giveaway|urgent winnings", re.I)),
 ]
 INVITE_PATTERNS = [
     re.compile(r"meeting|invite|invitation|calendar", re.I),
@@ -302,12 +313,58 @@ def heuristic_classify(message: dict, invite_mode: str) -> TriageOutcome | None:
     sender = (message.get("sender") or "")
     body_preview = (message.get("body_preview") or "")
     combined = f"{subject} {sender} {body_preview}"
+    sender_domain = sender.split("@")[-1].lower() if "@" in sender else ""
+
+    def _csv_set(name: str) -> set[str]:
+        return {x.strip().lower() for x in (os.getenv(name, "")).split(",") if x.strip()}
+
+    protected_domains = _csv_set("PROTECTED_DOMAINS") | _csv_set("CUSTOMER_DOMAINS")
+    protected_senders = _csv_set("PROTECTED_SENDERS")
+    protected_reason = ""
+    if sender.lower() in protected_senders:
+        protected_reason = "protected_sender"
+    elif sender_domain in protected_domains:
+        protected_reason = "protected_domain"
+
+    def explain(reason: str, matched_rule: str, matched_pattern: str, matched_field: str, is_protected: str = "") -> str:
+        return (
+            f"{reason} | matched_rule={matched_rule} | matched_pattern={matched_pattern} "
+            f"| matched_field={matched_field} | sender_domain={sender_domain} "
+            f"| protected_reason={is_protected or 'none'}"
+        )
 
     if any(p.search(combined) for p in INVITE_PATTERNS):
-        return TriageOutcome(Classification("CALENDAR_INVITE", "Inbox", 0.99, f"Invite detected; mode={invite_mode}", False), "invite")
+        return TriageOutcome(
+            Classification("CALENDAR_INVITE", "Inbox", 0.99, explain(f"Invite detected; mode={invite_mode}", "invite", "meeting/invite", "subject_or_body", protected_reason), False),
+            "heuristic",
+        )
+
+    for p in CUSTOMER_SAFETY_PATTERNS:
+        if p.search(subject):
+            return TriageOutcome(
+                Classification("NEEDS_REVIEW", "Inbox", 0.8, explain("Customer-safety override", "customer_safety_override", p.pattern, "subject", protected_reason), True),
+                "heuristic",
+            )
+
+    if protected_reason:
+        return TriageOutcome(
+            Classification("NEEDS_REVIEW", "Inbox", 0.85, explain("Protected sender/domain", "protected_sender_domain", protected_reason, "sender", protected_reason), True),
+            "heuristic",
+        )
+
+    for rule_name, field, pat in STRONG_DELETE_RULES:
+        haystack = sender if field == "sender" else f"{subject} {body_preview}"
+        if pat.search(haystack):
+            return TriageOutcome(
+                Classification("MOVE_TO_DELETE_FOLDER", "AI Sorted/Delete", 0.98, explain("Heuristic low-value email", rule_name, pat.pattern, field, protected_reason), False),
+                "heuristic",
+            )
 
     if any(p.search(combined) for p in LOW_VALUE_PATTERNS):
-        return TriageOutcome(Classification("MOVE_TO_DELETE_FOLDER", "AI Sorted/Delete", 0.98, "Heuristic low-value email", False), "heuristic")
+        return TriageOutcome(
+            Classification("NEEDS_REVIEW", "Inbox", 0.65, explain("Weak low-value signal escalated", "weak_low_value", "LOW_VALUE_PATTERNS", "subject_or_body", protected_reason), True),
+            "heuristic",
+        )
     return None
 
 
