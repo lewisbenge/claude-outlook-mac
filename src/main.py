@@ -179,11 +179,11 @@ def main() -> int:
             outcome_counts["classified"] += 1
         decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
         metadata_store.store(m.message_id, meta, result)
-        if result.project:
+        if getattr(result, "project", None):
             metrics.c["extracted_projects"] += 1
-        if result.action_required:
+        if getattr(result, "action_required", None):
             metrics.c["extracted_actions"] += 1
-        if result.priority:
+        if getattr(result, "priority", None):
             metrics.c["inferred_priorities"] += 1
         cache.add(m.message_id)
 
