@@ -16,6 +16,7 @@ from src.cache import ProcessedCache
 from src.folder_rules import FolderRuleConfig, choose_target_folder
 from src.outlook_client import OutlookClient, OutlookSafetyError
 from src.reporting import DecisionLog, write_csv_report, write_json_report
+from src.json_utils import truncate_payload
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--since-days", type=int, default=30)
     p.add_argument("--unread-only", action="store_true")
     p.add_argument("--include-direct-to-me", default="false")
+    p.add_argument("--debug-json", action="store_true")
     return p
 
 
@@ -46,6 +48,8 @@ def str_to_bool(value: str | bool | None) -> bool:
 
 def run_preflight(client: OutlookClient, classifier: BedrockClassifier) -> None:
     report = client.preflight_permission_check()
+    if report is None:
+        raise RuntimeError("Outlook preflight failed: no preflight report was returned")
     print(
         "Outlook preflight: "
         f"status={report.status}, "
@@ -89,8 +93,14 @@ def main() -> int:
     if not region or not model_id:
         raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID")
 
-    client = OutlookClient(Path("scripts"))
-    classifier = BedrockClassifier(region, model_id)
+    try:
+        client = OutlookClient(Path("scripts"), debug_json=args.debug_json)
+    except TypeError:
+        client = OutlookClient(Path("scripts"))
+    try:
+        classifier = BedrockClassifier(region, model_id, debug_json=args.debug_json)
+    except TypeError:
+        classifier = BedrockClassifier(region, model_id)
     run_preflight(client, classifier)
     if args.preflight_only:
         print("Preflight OK")
@@ -169,6 +179,12 @@ def main() -> int:
             cache.add(m.message_id)
         except Exception as exc:
             summary["failed"] += 1
+            print(
+                "WARNING message processing failure "
+                f"id={m.message_id} subject={truncate_payload(m.subject, 120)} "
+                f"subsystem=message_processing error={exc} "
+                f"payload={truncate_payload(meta)}"
+            )
             decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "NEEDS_REVIEW", 0.0, "Inbox", f"Failure: {exc}", True, "FAILED"))
 
     cache.save()
@@ -186,5 +202,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f"ERROR: {exc}")
+        print(f"ERROR runtime failure subsystem=top_level_main error={exc}")
         raise SystemExit(1)

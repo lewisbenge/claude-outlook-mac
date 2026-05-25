@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from src.json_utils import safe_json_loads
 
 
 @dataclass
@@ -34,9 +35,10 @@ class PreflightReport:
 
 
 class OutlookClient:
-    def __init__(self, scripts_dir: Path) -> None:
+    def __init__(self, scripts_dir: Path, debug_json: bool = False) -> None:
         self.scripts_dir = scripts_dir
         self.preflight_report: PreflightReport | None = None
+        self.debug_json = debug_json
 
     def _run_script(self, script_name: str, *args: str) -> str:
         script_path = self.scripts_dir / script_name
@@ -79,17 +81,26 @@ class OutlookClient:
         )
         if not folders:
             report.warnings.append("No Outlook folders were returned during preflight.")
+
+        # Re-check to ensure listing remains stable after warm-up.
+        self.list_folders()
         self.preflight_report = report
         return report
 
     def list_inbox_messages(self, limit: int = 50, max_body_preview_chars: int = 500, **_: object) -> list[OutlookMessage]:
         output = self._run_script("outlook_list_messages.applescript", str(limit), str(max_body_preview_chars))
-        raw = json.loads(output or "[]")
-        return [OutlookMessage(**msg) for msg in raw]
+        raw = safe_json_loads(
+            output or "[]",
+            context="applescript.list_inbox_messages",
+            default=[],
+            debug_json=self.debug_json,
+        )
+        return [OutlookMessage(**msg) for msg in raw if isinstance(msg, dict)]
 
     def list_folders(self) -> set[str]:
         output = self._run_script("outlook_list_folders.applescript")
-        return set(json.loads(output or "[]"))
+        parsed = safe_json_loads(output or "[]", context="applescript.list_folders", default=[], debug_json=self.debug_json)
+        return set(parsed if isinstance(parsed, list) else [])
 
     def create_folder(self, folder_name: str) -> None:
         self._run_script("outlook_create_folder.applescript", folder_name)
