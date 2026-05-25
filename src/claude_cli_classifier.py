@@ -65,6 +65,25 @@ class ClaudeCliClassifier:
                 needs_user_attention=True,
             )
 
+
+    def classify_many(self, messages: list[dict]) -> list[Classification]:
+        if len(messages) <= 1:
+            return [self.classify(m) for m in messages]
+        prompt = (
+            "Classify each email metadata item into one category: KEEP_IN_INBOX, "
+            "MOVE_TO_PROJECT_FOLDER, MOVE_TO_DELETE_FOLDER, NEEDS_REVIEW, CALENDAR_INVITE. "
+            "Return ONLY valid JSON array; every item must include keys: category,target_folder,confidence,reason,needs_user_attention. "
+            f"Emails: {json.dumps(messages)}"
+        )
+        try:
+            text = self._invoke_cli(prompt)
+            extracted = self._extract_first_json_object(text)
+            data = safe_json_loads(sanitize_control_chars(extracted), context="claude_cli.batch", default=[], debug_json=self.debug_json)
+            if not isinstance(data, list):
+                raise ValueError("batch response is not list")
+            return [Classification(**item) for item in data]
+        except Exception:
+            return [self.classify(m) for m in messages]
     def _invoke_cli(self, prompt: str) -> str:
         try:
             result = subprocess.run(

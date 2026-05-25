@@ -15,9 +15,9 @@ from src.bedrock_classifier import BedrockClassifier
 from src.claude_cli_classifier import ClaudeCliClassifier
 from src.cache import ProcessedCache
 from src.folder_rules import FolderRuleConfig, choose_target_folder
-from src.outlook_client import OutlookClient, OutlookSafetyError
+from src.outlook_client import OutlookClient
 from src.reporting import DecisionLog, write_csv_report, write_json_report
-from src.json_utils import truncate_payload
+from src.triage_engine import ClassificationCache, Metrics, classify_batch, heuristic_classify
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,26 +46,10 @@ def str_to_bool(value: str | bool | None) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-
 def run_preflight(client: OutlookClient, classifier) -> None:
     report = client.preflight_permission_check()
     if report is None:
         raise RuntimeError("Outlook preflight failed: no preflight report was returned")
-    print(
-        "Outlook preflight: "
-        f"status={report.status}, "
-        f"automation_access={report.automation_access}, "
-        f"inbox_access={report.inbox_access}, "
-        f"folder_enumeration={report.folder_enumeration}, "
-        f"folder_create={report.folder_create}, "
-        f"move_support={report.move_support}"
-    )
-    for warning in report.warnings:
-        print(f"WARNING: {warning}")
-    Path("reports").mkdir(parents=True, exist_ok=True)
-    testfile = Path("reports/.write_test")
-    testfile.write_text("ok", encoding="utf-8")
-    testfile.unlink(missing_ok=True)
     classifier.preflight_check()
 
 
@@ -82,120 +66,101 @@ def main() -> int:
     apply_enabled = os.getenv("ALLOW_APPLY", "false").lower() == "true"
     confidence_threshold = float(os.getenv("CONFIDENCE_THRESHOLD", "0.75"))
     include_direct_to_me = str_to_bool(args.include_direct_to_me)
+    invite_mode = os.getenv("CALENDAR_INVITE_MODE", "tentative").strip().lower()
+    workers = int(os.getenv("CLAUDE_WORKERS", "4"))
+    batch_size = int(os.getenv("CLAUDE_BATCH_SIZE", "4"))
     my_email = os.getenv("USER_EMAIL", "")
-
     if args.apply and args.confirm_apply != "MOVE_EMAILS":
         raise RuntimeError('For --apply you must pass --confirm-apply "MOVE_EMAILS" exactly.')
 
     backend = os.getenv("CLASSIFIER_BACKEND", "claude_cli").strip().lower()
-    claude_command = os.getenv("CLAUDE_CLI_COMMAND", "claude")
-
     try:
         client = OutlookClient(Path("scripts"), debug_json=args.debug_json)
     except TypeError:
         client = OutlookClient(Path("scripts"))
     if backend == "claude_cli":
         try:
-            classifier = ClaudeCliClassifier(command=claude_command, debug_json=args.debug_json)
+            classifier = ClaudeCliClassifier(command=os.getenv("CLAUDE_CLI_COMMAND", "claude"), debug_json=args.debug_json)
         except TypeError:
-            classifier = ClaudeCliClassifier(command=claude_command)
-    elif backend == "bedrock":
-        region = os.getenv("AWS_REGION")
-        model_id = os.getenv("BEDROCK_MODEL_ID")
-        inference_profile_arn = os.getenv("BEDROCK_INFERENCE_PROFILE_ARN")
-        if not region or not model_id:
-            raise RuntimeError("Missing AWS_REGION or BEDROCK_MODEL_ID for CLASSIFIER_BACKEND=bedrock")
-        try:
-            classifier = BedrockClassifier(region, model_id, inference_profile_arn=inference_profile_arn, debug_json=args.debug_json)
-        except TypeError:
-            classifier = BedrockClassifier(region, model_id)
+            classifier = ClaudeCliClassifier(command=os.getenv("CLAUDE_CLI_COMMAND", "claude"))
     else:
-        raise RuntimeError("CLASSIFIER_BACKEND must be one of: claude_cli, bedrock")
+        classifier = BedrockClassifier(os.getenv("AWS_REGION"), os.getenv("BEDROCK_MODEL_ID"))
     run_preflight(client, classifier)
     if args.preflight_only:
-        print("Preflight OK")
         return 0
 
     client.ensure_outlook_running()
     cache = ProcessedCache(Path(".cache/processed_messages.json"))
+    class_cache = ClassificationCache(Path(".cache/classification_cache.sqlite"))
+    metrics = Metrics()
     if args.reset_cache:
         cache.reset()
-
-    messages = client.list_inbox_messages(
-        limit=args.limit,
-        max_body_preview_chars=args.max_body_preview_chars,
-        since_days=args.since_days,
-        unread_only=args.unread_only,
-    )
-    folder_cfg = FolderRuleConfig(root_folder_name="AI Sorted", delete_folder_leaf="Delete")
-    try:
-        existing_folders = client.list_folders()
-    except Exception as exc:
-        print(f"WARNING: Folder listing unavailable in runtime; relying on direct create/move behavior. {exc}")
-        existing_folders = set()
+    messages = client.list_inbox_messages(limit=args.limit, max_body_preview_chars=args.max_body_preview_chars, since_days=args.since_days, unread_only=args.unread_only)
 
     decisions: list[DecisionLog] = []
     summary = {"kept_in_inbox": 0, "moved_project": 0, "moved_delete": 0, "needs_review": 0, "failed": 0}
+    folder_cfg = FolderRuleConfig(root_folder_name="AI Sorted", delete_folder_leaf="Delete")
+    existing_folders = client.list_folders()
 
+    to_classify = []
+    pending_messages = []
     for m in messages:
         if cache.contains(m.message_id):
             continue
         if not include_direct_to_me and _is_direct_to_me(m, my_email):
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "KEEP_IN_INBOX", 1.0, "Inbox", "Directly addressed; skipped per config", True, "KEEP"))
-            summary["kept_in_inbox"] += 1
+            metrics.c["skipped_direct_to_me"] += 1
+            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "KEEP_IN_INBOX", 1.0, "Inbox", "Directly addressed", True, "KEEP"))
             cache.add(m.message_id)
             continue
-
-        meta = {
-            "subject": m.subject,
-            "sender": m.sender,
-            "recipients": m.recipients,
-            "cc": m.cc,
-            "received_at": m.received_at,
-            "folder": m.folder,
-            "body_preview": "" if args.no_body_preview else m.body_preview,
-        }
-
-        action = "KEEP"
-        try:
-            result = classifier.classify(meta)
-            category = result.category
-            target = choose_target_folder(category, result.target_folder, folder_cfg)
-            if result.confidence < confidence_threshold:
-                category, target = "NEEDS_REVIEW", "Inbox"
-
-            if category in {"MOVE_TO_PROJECT_FOLDER", "MOVE_TO_DELETE_FOLDER"} and target != "Inbox":
-                action = f"MOVE->{target}"
-                if args.interactive_review and args.apply:
-                    ans = input(f"Move '{m.subject}' to '{target}'? [y/N]: ").strip().lower()
-                    if ans not in {"y", "yes"}:
-                        category, target, action = "NEEDS_REVIEW", "Inbox", "SKIPPED_BY_USER"
-                if target != "Inbox" and args.apply:
-                    if target not in existing_folders and apply_enabled:
-                        client.create_folder(target)
-                        existing_folders.add(target)
-                    client.move_message(m.message_id, target, apply_enabled=apply_enabled)
-
-            if category == "KEEP_IN_INBOX":
-                summary["kept_in_inbox"] += 1
-            elif category == "MOVE_TO_PROJECT_FOLDER" and action.startswith("MOVE->"):
-                summary["moved_project"] += 1
-            elif category == "MOVE_TO_DELETE_FOLDER" and action.startswith("MOVE->"):
-                summary["moved_delete"] += 1
-            elif category == "NEEDS_REVIEW":
-                summary["needs_review"] += 1
-
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, category, result.confidence, target, result.reason, result.needs_user_attention, action))
+        meta = {"subject": m.subject, "sender": m.sender, "recipients": m.recipients, "cc": m.cc, "received_at": m.received_at, "folder": m.folder, "body_preview": "" if args.no_body_preview else m.body_preview[:args.max_body_preview_chars]}
+        h = heuristic_classify(meta, invite_mode)
+        if h:
+            metrics.c["heuristic_hits"] += 1
+            if h.classification.category == "CALENDAR_INVITE":
+                metrics.c["invite_handling_count"] += 1
+                if invite_mode == "tentative":
+                    client.try_mark_tentative(m.message_id)
+            result = h.classification
+            target = choose_target_folder(result.category, result.target_folder, folder_cfg)
+            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
             cache.add(m.message_id)
-        except Exception as exc:
-            summary["failed"] += 1
-            print(
-                "WARNING message processing failure "
-                f"id={m.message_id} subject={truncate_payload(m.subject, 120)} "
-                f"subsystem=message_processing error={exc} "
-                f"payload={truncate_payload(meta)}"
-            )
-            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, "NEEDS_REVIEW", 0.0, "Inbox", f"Failure: {exc}", True, "FAILED"))
+            continue
+        cached = class_cache.lookup(m.sender, m.subject)
+        if cached and cached.confidence >= confidence_threshold:
+            metrics.c["cache_hits"] += 1
+            target = choose_target_folder(cached.category, cached.target_folder, folder_cfg)
+            decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, cached.category, cached.confidence, target, "classification cache", False, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+            cache.add(m.message_id)
+            continue
+        to_classify.append(meta)
+        pending_messages.append(m)
+
+    classified = classify_batch(classifier, to_classify, workers=workers, batch_size=batch_size, metrics=metrics)
+    for m, result in zip(pending_messages, classified):
+        target = choose_target_folder(result.category, result.target_folder, folder_cfg)
+        if result.confidence < confidence_threshold:
+            result.category, target = "NEEDS_REVIEW", "Inbox"
+        class_cache.store(m.sender, m.subject, result)
+        decisions.append(DecisionLog(m.message_id, m.subject, m.sender, m.recipients, m.cc, m.received_at, m.folder, result.category, result.confidence, target, result.reason, result.needs_user_attention, "KEEP" if target == "Inbox" else f"MOVE->{target}"))
+        cache.add(m.message_id)
+
+    for d in decisions:
+        if d.target_folder != "Inbox" and d.category in {"MOVE_TO_PROJECT_FOLDER", "MOVE_TO_DELETE_FOLDER"} and args.apply:
+            if d.target_folder not in existing_folders and apply_enabled:
+                client.create_folder(d.target_folder)
+                existing_folders.add(d.target_folder)
+            try:
+                client.move_message(d.message_id, d.target_folder, apply_enabled=apply_enabled)
+            except Exception:
+                pass
+        if d.category in {"KEEP_IN_INBOX", "CALENDAR_INVITE"}:
+            summary["kept_in_inbox"] += 1
+        elif d.category == "MOVE_TO_PROJECT_FOLDER":
+            summary["moved_project"] += 1
+        elif d.category == "MOVE_TO_DELETE_FOLDER":
+            summary["moved_delete"] += 1
+        elif d.category == "NEEDS_REVIEW":
+            summary["needs_review"] += 1
 
     cache.save()
     reports_dir = Path("reports")
@@ -203,14 +168,10 @@ def main() -> int:
     write_csv_report(decisions, reports_dir / "dry_run_report.csv")
     shutil.copyfile(reports_dir / "dry_run_report.json", reports_dir / "latest.json")
     shutil.copyfile(reports_dir / "dry_run_report.csv", reports_dir / "latest.csv")
-    print(f"Processed {len(decisions)} messages")
     print(f"Summary: {summary}")
+    print(f"Metrics: {metrics.as_dict()}")
     return 0
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:
-        print(f"ERROR runtime failure subsystem=top_level_main error={exc}")
-        raise SystemExit(1)
+    raise SystemExit(main())
