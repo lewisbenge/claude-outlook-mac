@@ -46,14 +46,6 @@ def str_to_bool(value: str | bool | None) -> bool:
 
 def run_preflight(client: OutlookClient, classifier: BedrockClassifier) -> None:
     report = client.preflight_permission_check()
-    if report is None:
-        fallback_report = getattr(client, "preflight_report", None)
-        if fallback_report is None:
-            raise RuntimeError(
-                "Outlook preflight failed: no preflight report was returned. "
-                "Ensure OutlookClient.preflight_permission_check returns a report object."
-            )
-        report = fallback_report
     print(
         "Outlook preflight: "
         f"status={report.status}, "
