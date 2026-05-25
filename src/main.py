@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-body-preview-chars", type=int, default=500)
     p.add_argument("--interactive-review", action="store_true")
     p.add_argument("--reset-cache", action="store_true")
+    p.add_argument("--reset-db", action="store_true")
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--confirm-apply", default="")
     p.add_argument("--since-days", type=int, default=30)
@@ -102,9 +103,18 @@ def main() -> int:
         return 0
 
     client.ensure_outlook_running()
+    db_path = Path(".cache/classification_cache.sqlite")
+    if args.reset_db and db_path.exists():
+        db_path.unlink()
+        print(f"[startup] reset-db enabled: removed {db_path}")
     cache = ProcessedCache(Path(".cache/processed_messages.json"))
-    class_cache = ClassificationCache(Path(".cache/classification_cache.sqlite"))
-    metadata_store = OperationalMetadataStore(Path(".cache/classification_cache.sqlite"))
+    class_cache = ClassificationCache(db_path)
+    migration_info = class_cache.migrate()
+    print(
+        f"[startup] schema_version={migration_info['current_version']} "
+        f"migrations_applied={migration_info['migrations_applied']}"
+    )
+    metadata_store = OperationalMetadataStore(db_path)
     metrics = Metrics()
     if args.reset_cache:
         cache.reset()

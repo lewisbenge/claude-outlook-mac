@@ -45,23 +45,88 @@ class ClassificationCache:
     def _connect(self):
         return sqlite3.connect(self.db_path)
 
-    def _init_db(self):
-        with self._connect() as con:
-            con.execute(
-                """
-                CREATE TABLE IF NOT EXISTS classification_cache (
-                  key TEXT PRIMARY KEY,
-                  thread_key TEXT,
-                  sender TEXT,
-                  domain TEXT,
-                  subject_key TEXT,
-                  category TEXT,
-                  target_folder TEXT,
-                  confidence REAL,
-                  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-                """
+    @staticmethod
+    def _column_exists(con, table_name: str, column_name: str) -> bool:
+        rows = con.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return any(r[1] == column_name for r in rows)
+
+    def _ensure_migrations_table(self, con) -> None:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+              version INTEGER PRIMARY KEY,
+              name TEXT NOT NULL,
+              applied_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
+            """
+        )
+
+    def _ensure_base_tables(self, con) -> None:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS classification_cache (
+              key TEXT PRIMARY KEY,
+              sender TEXT,
+              domain TEXT,
+              subject_key TEXT,
+              category TEXT,
+              target_folder TEXT,
+              confidence REAL,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        con.execute("CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL)")
+        con.execute("CREATE TABLE IF NOT EXISTS stakeholders (id INTEGER PRIMARY KEY, email TEXT UNIQUE, name TEXT)")
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS email_metadata (
+            message_id TEXT PRIMARY KEY,
+            thread_key TEXT,
+            sender TEXT,
+            sender_domain TEXT,
+            recurring_thread INTEGER DEFAULT 0,
+            calendar_invite INTEGER DEFAULT 0,
+            source_system TEXT,
+            project_id INTEGER,
+            organization TEXT,
+            action_required INTEGER,
+            priority TEXT,
+            topics_json TEXT,
+            meeting_related INTEGER,
+            contains_decision INTEGER,
+            contains_tasking INTEGER,
+            short_summary TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(project_id) REFERENCES projects(id)
+            )"""
+        )
+        con.execute("CREATE TABLE IF NOT EXISTS email_stakeholders (message_id TEXT, stakeholder_id INTEGER, PRIMARY KEY(message_id, stakeholder_id))")
+
+    def _apply_migrations(self, con) -> list[int]:
+        migrations = [
+            (1, "add_classification_cache_thread_key"),
+        ]
+        applied: list[int] = []
+        for version, name in migrations:
+            already = con.execute("SELECT 1 FROM schema_migrations WHERE version=?", (version,)).fetchone()
+            if already:
+                continue
+            if version == 1 and not self._column_exists(con, "classification_cache", "thread_key"):
+                con.execute("ALTER TABLE classification_cache ADD COLUMN thread_key TEXT")
+            con.execute("INSERT OR IGNORE INTO schema_migrations(version,name) VALUES(?,?)", (version, name))
+            applied.append(version)
+        return applied
+
+    def migrate(self) -> dict:
+        with self._connect() as con:
+            self._ensure_base_tables(con)
+            self._ensure_migrations_table(con)
+            applied = self._apply_migrations(con)
+            current = con.execute("SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()[0]
+            return {"current_version": int(current), "migrations_applied": applied}
+
+    def _init_db(self):
+        self.migrate()
 
     @staticmethod
     def make_thread_key(subject: str) -> str:
@@ -75,13 +140,16 @@ class ClassificationCache:
         thread_key = self.make_thread_key(subject)
         keys = [f"thread:{thread_key}", f"sender:{sender.lower()}", f"domain:{domain}", f"subject:{subject_key}"]
         with self._connect() as con:
-            for key in keys:
-                row = con.execute(
-                    "SELECT category,target_folder,confidence FROM classification_cache WHERE key=?",
-                    (key,),
-                ).fetchone()
-                if row:
-                    return Classification(category=row[0], target_folder=row[1], confidence=float(row[2]), reason="cache hit", needs_user_attention=False)
+            try:
+                for key in keys:
+                    row = con.execute(
+                        "SELECT category,target_folder,confidence FROM classification_cache WHERE key=?",
+                        (key,),
+                    ).fetchone()
+                    if row:
+                        return Classification(category=row[0], target_folder=row[1], confidence=float(row[2]), reason="cache hit", needs_user_attention=False)
+            except sqlite3.OperationalError:
+                self.migrate()
         return None
 
     def store(self, sender: str, subject: str, result: Classification):
@@ -96,17 +164,31 @@ class ClassificationCache:
         ]
         with self._lock:
             with self._connect() as con:
-                con.executemany(
-                    """
-                    INSERT INTO classification_cache(key,thread_key,sender,domain,subject_key,category,target_folder,confidence)
-                    VALUES(?,?,?,?,?,?,?,?)
-                    ON CONFLICT(key) DO UPDATE SET
-                      thread_key=excluded.thread_key,sender=excluded.sender,domain=excluded.domain,subject_key=excluded.subject_key,
-                      category=excluded.category,target_folder=excluded.target_folder,confidence=excluded.confidence,
-                      updated_at=CURRENT_TIMESTAMP
-                    """,
-                    rows,
-                )
+                try:
+                    con.executemany(
+                        """
+                        INSERT INTO classification_cache(key,thread_key,sender,domain,subject_key,category,target_folder,confidence)
+                        VALUES(?,?,?,?,?,?,?,?)
+                        ON CONFLICT(key) DO UPDATE SET
+                          thread_key=excluded.thread_key,sender=excluded.sender,domain=excluded.domain,subject_key=excluded.subject_key,
+                          category=excluded.category,target_folder=excluded.target_folder,confidence=excluded.confidence,
+                          updated_at=CURRENT_TIMESTAMP
+                        """,
+                        rows,
+                    )
+                except sqlite3.OperationalError:
+                    self.migrate()
+                    con.executemany(
+                        """
+                        INSERT INTO classification_cache(key,thread_key,sender,domain,subject_key,category,target_folder,confidence)
+                        VALUES(?,?,?,?,?,?,?,?)
+                        ON CONFLICT(key) DO UPDATE SET
+                          thread_key=excluded.thread_key,sender=excluded.sender,domain=excluded.domain,subject_key=excluded.subject_key,
+                          category=excluded.category,target_folder=excluded.target_folder,confidence=excluded.confidence,
+                          updated_at=CURRENT_TIMESTAMP
+                        """,
+                        rows,
+                    )
 
 
 class OperationalMetadataStore:
@@ -119,32 +201,8 @@ class OperationalMetadataStore:
         return sqlite3.connect(self.db_path)
 
     def _init_db(self):
-        with self._connect() as con:
-            con.execute("CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL)")
-            con.execute("CREATE TABLE IF NOT EXISTS stakeholders (id INTEGER PRIMARY KEY, email TEXT UNIQUE, name TEXT)")
-            con.execute(
-                """CREATE TABLE IF NOT EXISTS email_metadata (
-                message_id TEXT PRIMARY KEY,
-                thread_key TEXT,
-                sender TEXT,
-                sender_domain TEXT,
-                recurring_thread INTEGER DEFAULT 0,
-                calendar_invite INTEGER DEFAULT 0,
-                source_system TEXT,
-                project_id INTEGER,
-                organization TEXT,
-                action_required INTEGER,
-                priority TEXT,
-                topics_json TEXT,
-                meeting_related INTEGER,
-                contains_decision INTEGER,
-                contains_tasking INTEGER,
-                short_summary TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(project_id) REFERENCES projects(id)
-                )"""
-            )
-            con.execute("CREATE TABLE IF NOT EXISTS email_stakeholders (message_id TEXT, stakeholder_id INTEGER, PRIMARY KEY(message_id, stakeholder_id))")
+        # Schema bootstrap/migrations are handled by ClassificationCache for this shared DB.
+        ClassificationCache(self.db_path).migrate()
 
     def _upsert_project(self, con, name: str | None):
         if not name:

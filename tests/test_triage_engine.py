@@ -1,3 +1,5 @@
+import sqlite3
+
 from src.triage_engine import ClassificationCache, Metrics, classify_batch, enrich_deterministic_meta, heuristic_classify
 from src.claude_cli_classifier import Classification
 
@@ -59,3 +61,40 @@ def test_enrich_deterministic_meta_extracts_operational_fields():
     assert out["sender_domain"] == "example.com"
     assert out["recurring_thread"] is True
     assert out["source_system"] == "jira"
+
+
+def test_sqlite_migrates_legacy_schema_without_thread_key(tmp_path):
+    db = tmp_path / "legacy.sqlite"
+    con = sqlite3.connect(db)
+    con.execute(
+        """
+        CREATE TABLE classification_cache (
+          key TEXT PRIMARY KEY,
+          sender TEXT,
+          domain TEXT,
+          subject_key TEXT,
+          category TEXT,
+          target_folder TEXT,
+          confidence REAL,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    con.close()
+
+    c = ClassificationCache(db)
+    info = c.migrate()
+    assert info["current_version"] >= 1
+
+    with sqlite3.connect(db) as con2:
+        cols = [r[1] for r in con2.execute("PRAGMA table_info(classification_cache)").fetchall()]
+    assert "thread_key" in cols
+
+
+def test_sqlite_migrations_are_idempotent(tmp_path):
+    db = tmp_path / "idem.sqlite"
+    c = ClassificationCache(db)
+    first = c.migrate()
+    second = c.migrate()
+    assert first["current_version"] >= 1
+    assert second["migrations_applied"] == []
