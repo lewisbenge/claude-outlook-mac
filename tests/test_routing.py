@@ -44,7 +44,7 @@ def test_project_routing():
 
 
 def test_project_fysa_moves_to_projects():
-    d = determine_routing(ctx(operational_class="PROJECT", project="FYSA Apollo", action_required=False))
+    d = determine_routing(ctx(operational_class="PROJECT", project="FYSA Apollo", action_required=False, confidence=0.65, topics=["FYSA"]))
     assert d.target_folder == "AI Sorted/Projects/FYSA_Apollo"
 
 
@@ -68,10 +68,16 @@ def test_org_domain_alias_normalization():
     assert d.target_folder == "AI Sorted/Customers/Melco"
 
 
-def test_weak_project_inference_to_needs_review():
-    d = determine_routing(ctx(operational_class="PROJECT", project="ASPI Alpha", confidence=0.6))
+def test_low_confidence_project_inference_to_needs_review():
+    d = determine_routing(ctx(operational_class="PROJECT", project="ASPI Alpha", confidence=0.4))
     assert d.target_folder == "AI Sorted/Needs Review"
-    assert d.matched_rule == "weak_project_inference"
+    assert d.matched_rule == "low_confidence_non_action"
+
+
+def test_medium_confidence_project_prefers_folder():
+    d = determine_routing(ctx(operational_class="PROJECT", project="ASPI Alpha", confidence=0.6))
+    assert d.target_folder == "AI Sorted/Projects/ASPI_Alpha"
+    assert d.matched_rule == "project_medium_confidence_prefer_folder"
 
 
 def test_weak_action_inference_prefers_needs_review():
