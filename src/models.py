@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+ALLOWED_CLASS = {
+    "CUSTOMER","PROJECT","TRAVEL","CALENDAR","ADMIN","FINANCE","NEWSLETTER","AUTOMATION","SALES_SPAM","PERSONAL","UNKNOWN"
+}
+ALLOWED_URGENCY = {"LOW", "MEDIUM", "HIGH"}
+
+
+@dataclass
+class EmailOperationalContext:
+    operational_class: str
+    customer_or_org: str | None = None
+    project: str | None = None
+    needs_user_attention: bool = False
+    action_required: bool = False
+    follow_up_required: bool = False
+    action_summary: str | None = None
+    urgency: str = "LOW"
+    waiting_on_me: bool = False
+    waiting_on_external: bool = False
+    deadline_detected: str | None = None
+    confidence: float = 0.0
+    reason: str = ""
+    topics: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.operational_class not in ALLOWED_CLASS:
+            raise ValueError("invalid operational_class")
+        if self.urgency not in ALLOWED_URGENCY:
+            raise ValueError("invalid urgency")
+        if not (0.0 <= float(self.confidence) <= 1.0):
+            raise ValueError("confidence out of range")
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "EmailOperationalContext":
+        return cls(**data)
