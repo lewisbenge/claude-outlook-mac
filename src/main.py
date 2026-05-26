@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -35,8 +36,21 @@ def write_action_reports(rows: list[dict]) -> None:
             w.writerows(rows)
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def initialize_environment(repo_root: Path | None = None) -> None:
+    root = repo_root or REPO_ROOT
+    dotenv_path = root / ".env"
+    env_found = load_dotenv(dotenv_path=dotenv_path)
+    print(f"[startup] .env file found: {env_found}")
+    print(f"[startup] OPENWEBUI_BASE_URL set: {bool(os.getenv('OPENWEBUI_BASE_URL'))}")
+    print(f"[startup] OPENWEBUI_MODEL set: {bool(os.getenv('OPENWEBUI_MODEL'))}")
+    print(f"[startup] OPENWEBUI_API_KEY set: {bool(os.getenv('OPENWEBUI_API_KEY'))}")
+
+
 def main() -> int:
-    load_dotenv()
+    initialize_environment()
     args = build_parser().parse_args()
     if args.apply and args.confirm_apply != "MOVE_EMAILS":
         raise RuntimeError('For --apply you must pass --confirm-apply "MOVE_EMAILS" exactly.')
