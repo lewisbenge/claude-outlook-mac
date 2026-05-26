@@ -51,3 +51,20 @@ def test_unknown_non_action_to_needs_review():
 def test_newsletter_high_confidence_delete_folder():
     d = determine_routing(ctx(operational_class="NEWSLETTER", confidence=0.92))
     assert d.target_folder == "AI Sorted/Delete"
+
+
+def test_org_domain_alias_normalization():
+    d = determine_routing(ctx(operational_class="CUSTOMER", customer_or_org="https://www.melco-resorts.com"))
+    assert d.target_folder == "AI Sorted/Customers/Melco"
+
+
+def test_weak_project_inference_to_needs_review():
+    d = determine_routing(ctx(operational_class="PROJECT", project="ASPI Alpha", confidence=0.6))
+    assert d.target_folder == "AI Sorted/Needs Review"
+    assert d.matched_rule == "weak_project_inference"
+
+
+def test_weak_action_inference_prefers_needs_review():
+    d = determine_routing(ctx(action_required=True, confidence=0.6))
+    assert d.target_folder == "AI Sorted/Needs Review"
+    assert d.matched_rule == "weak_action_inference"
