@@ -43,3 +43,15 @@ def test_confidence_invalid_defaults_safely():
     payload = _base_payload() | {"confidence": "definitely"}
     ctx = EmailOperationalContext.from_dict(payload)
     assert ctx.confidence == 0.5
+
+
+def test_should_leave_in_inbox_only_when_clear_action():
+    ctx = EmailOperationalContext.from_dict(_base_payload() | {"clear_action_for_user": True, "should_leave_in_inbox": False})
+    assert ctx.clear_action_for_user is True
+    assert ctx.should_leave_in_inbox is True
+
+
+def test_default_no_clear_action_not_in_inbox():
+    ctx = EmailOperationalContext.from_dict(_base_payload())
+    assert ctx.clear_action_for_user is False
+    assert ctx.should_leave_in_inbox is False

@@ -19,6 +19,10 @@ class EmailOperationalContext:
     action_required: bool = False
     follow_up_required: bool = False
     action_summary: str | None = None
+    clear_action_for_user: bool = False
+    inbox_retention_reason: str | None = None
+    suggested_review_folder: str | None = None
+    should_leave_in_inbox: bool = False
     urgency: str = "LOW"
     waiting_on_me: bool = False
     waiting_on_external: bool = False
@@ -49,6 +53,9 @@ class EmailOperationalContext:
         if "urgency" in filtered and filtered["urgency"] not in ALLOWED_URGENCY:
             filtered["urgency"] = "LOW"
         filtered["confidence"] = cls._normalize_confidence(filtered.get("confidence"))
+        clear_action = bool(filtered.get("clear_action_for_user", False))
+        filtered["clear_action_for_user"] = clear_action
+        filtered["should_leave_in_inbox"] = clear_action
         return cls(**filtered)
 
     @staticmethod

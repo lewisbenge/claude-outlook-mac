@@ -33,6 +33,9 @@ class OpenWebUIClassifier:
                 "needs_user_attention": True,
                 "follow_up_required": True,
                 "action_required": False,
+                "clear_action_for_user": False,
+                "should_leave_in_inbox": False,
+                "suggested_review_folder": "AI Sorted/Needs Review",
                 "urgency": "LOW",
                 "waiting_on_me": True,
                 "waiting_on_external": False,
@@ -119,7 +122,7 @@ class OpenWebUIClassifier:
             "model": self.model,
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": "You are a structured extraction API. Return only a JSON object containing allowed keys: operational_class, customer_or_org, project, needs_user_attention, action_required, follow_up_required, action_summary, urgency, waiting_on_me, waiting_on_external, deadline_detected, confidence, reason, topics. Never include extra keys. Never include subject, sender, recipients, cc, body, or any raw email metadata. confidence must be a number from 0.0 to 1.0, not text. No prose or markdown."},
+                {"role": "system", "content": "You are helping clear the Inbox. Do not keep emails in Inbox unless there is a clear action assigned to Lewis. Project/customer relevance is not an action. FYSA, updates, briefings, notifications, and general awareness emails should be moved to folders. Uncertain emails go to Needs Review, not Inbox. Return only a JSON object containing allowed keys: operational_class, customer_or_org, project, needs_user_attention, action_required, follow_up_required, action_summary, clear_action_for_user, inbox_retention_reason, suggested_review_folder, should_leave_in_inbox, urgency, waiting_on_me, waiting_on_external, deadline_detected, confidence, reason, topics. should_leave_in_inbox must only be true when clear_action_for_user is true. Never include extra keys. Never include subject, sender, recipients, cc, body, or any raw email metadata. confidence must be a number from 0.0 to 1.0, not text. No prose or markdown. Examples: 'Can you send the deck by Friday?' => clear_action_for_user=true, should_leave_in_inbox=true. 'FYSA, updated briefing attached' => clear_action_for_user=false. 'Flight booking reminder' => TRAVEL. 'Weekly newsletter' => NEWSLETTER or SALES_SPAM. 'Customer meeting notes, no request' => clear_action_for_user=false. 'I need your approval' => clear_action_for_user=true. 'General project update' => clear_action_for_user=false."},
                 {"role": "user", "content": f"subject:{email.subject}\nfrom:{email.sender}\nbody:{email.body_preview}"},
             ],
         }
