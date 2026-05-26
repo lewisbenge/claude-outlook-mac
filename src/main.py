@@ -109,6 +109,14 @@ def main() -> int:
         "moved_to_customer_count": sum(1 for r in actions if r["target_folder"].startswith("AI Sorted/Customers/")),
         "moved_to_project_count": sum(1 for r in actions if r["target_folder"].startswith("AI Sorted/Projects/")),
         "moved_to_needs_review_count": sum(1 for r in actions if r["target_folder"] == "AI Sorted/Needs Review"),
+        "needs_review_reason_counts": {
+            reason: sum(1 for r in actions if r["target_folder"] == "AI Sorted/Needs Review" and r.get("routing_policy_reason") == reason)
+            for reason in sorted({r.get("routing_policy_reason") for r in actions if r["target_folder"] == "AI Sorted/Needs Review"})
+        },
+        "informational_routed_count": sum(1 for r in actions if "informational" in (r.get("routing_policy_reason") or "")),
+        "cc_only_routed_count": sum(1 for r in actions if "cc" in " ".join((r.get("action_summary") or "", r.get("routing_policy_reason") or "")).lower()),
+        "operational_memory_hits": sum(1 for r in actions if r.get("routing_source") in {"thread_affinity", "sender_affinity", "historical_affinity"}),
+        "confidence_boost_hits": sum(1 for r in actions if "boost" in (r.get("routing_policy_reason") or "")),
         "flagged_followup_count": sum(1 for r in actions if r.get("would_flag_followup")),
         "over_conservative_warnings": int(all(r["target_folder"] == "Inbox" for r in actions)) if actions else 0,
     }

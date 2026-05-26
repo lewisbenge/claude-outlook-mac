@@ -57,6 +57,12 @@ INFORMATIONAL_PHRASES = [
     re.compile(r"\bfysa\b", re.I),
     re.compile(r"\bfor your awareness\b", re.I),
     re.compile(r"\bcustomer update\b", re.I),
+    re.compile(r"\bweekly update\b", re.I),
+    re.compile(r"\bstatus update\b", re.I),
+    re.compile(r"\bbriefing attached\b", re.I),
+    re.compile(r"\bmeeting notes\b", re.I),
+    re.compile(r"\bminutes\b", re.I),
+    re.compile(r"\bdistribution list\b", re.I),
 ]
 
 
@@ -398,7 +404,7 @@ def heuristic_classify(message: dict, invite_mode: str) -> TriageOutcome | None:
     cc_only_info = informational_hit and sender and recipients and sender.lower() not in recipients.lower()
     if informational_hit and not action_hits:
         return TriageOutcome(
-            Classification("NEEDS_REVIEW", "AI Sorted/Needs Review", 0.7, explain("Informational email without direct ask", "informational_only", "|".join(action_hits) or "none", "subject_or_body", protected_reason), True),
+            Classification("PROJECT", "AI Sorted/Projects/General", 0.76, explain("Informational email without direct ask", "informational_only", "|".join(action_hits) or "none", "subject_or_body", protected_reason), False),
             "heuristic",
             routing_source="informational",
             heuristic_match="cc_informational" if cc_only_info else "informational_only",

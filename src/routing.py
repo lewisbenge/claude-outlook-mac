@@ -5,6 +5,18 @@ from dataclasses import dataclass
 
 from src.models import EmailOperationalContext
 
+INFORMATIONAL_TOPIC_HINTS = {
+    "fysa",
+    "for awareness",
+    "weekly update",
+    "status update",
+    "briefing attached",
+    "meeting notes",
+    "minutes",
+    "distribution list",
+    "cc-only",
+}
+
 ORG_NORMALIZATION = {
     "lnic pty ltd": "LNIC",
     "lnic": "LNIC",
@@ -39,6 +51,13 @@ def normalize_name(value: str | None) -> str | None:
 
 
 def determine_routing(ctx: EmailOperationalContext) -> RoutingDecision:
+    confidence = float(ctx.confidence)
+    high_confidence = confidence >= 0.8
+    medium_confidence = 0.5 <= confidence < 0.8
+    low_confidence = confidence < 0.5
+    topics = {t.strip().lower() for t in (ctx.topics or []) if t and t.strip()}
+    informational_signal = bool(topics & INFORMATIONAL_TOPIC_HINTS)
+
     has_action_summary = bool((ctx.action_summary or "").strip())
     clear_action = bool(ctx.clear_action_for_user)
     if ctx.waiting_on_me and has_action_summary:
@@ -50,17 +69,20 @@ def determine_routing(ctx: EmailOperationalContext) -> RoutingDecision:
 
     if ctx.action_required and (not clear_action or not has_action_summary):
         return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "action_required_but_vague")
-    if ctx.confidence < 0.5:
+    if low_confidence:
         return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "low_confidence_non_action")
 
     if ctx.operational_class == "CUSTOMER" and ctx.customer_or_org:
         customer = normalize_name(ctx.customer_or_org)
-        return RoutingDecision("MOVE", f"AI Sorted/Customers/{customer}", "deterministic", "customer_no_action:normalized_org")
+        rule = "customer_informational_prefer_folder" if informational_signal or medium_confidence or high_confidence else "customer_no_action:normalized_org"
+        return RoutingDecision("MOVE", f"AI Sorted/Customers/{customer}", "deterministic", rule)
 
     if ctx.operational_class == "PROJECT" and ctx.project:
-        if ctx.confidence < 0.75:
-            return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "weak_project_inference")
-        return RoutingDecision("MOVE", f"AI Sorted/Projects/{normalize_name(ctx.project)}", "deterministic", "project_no_action")
+        if medium_confidence:
+            return RoutingDecision("MOVE", f"AI Sorted/Projects/{normalize_name(ctx.project)}", "deterministic", "project_medium_confidence_prefer_folder")
+        if high_confidence:
+            return RoutingDecision("MOVE", f"AI Sorted/Projects/{normalize_name(ctx.project)}", "deterministic", "project_no_action")
+        return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "weak_project_inference")
 
     if ctx.operational_class == "TRAVEL":
         return RoutingDecision("MOVE", "AI Sorted/Travel", "deterministic", "travel")
