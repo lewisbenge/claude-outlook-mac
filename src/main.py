@@ -86,7 +86,14 @@ def main() -> int:
             ctx.confidence = affinity.boosted_confidence
             if affinity.explain:
                 ctx.reason = f"{ctx.reason}; confidence boost via operational memory: {'; '.join(affinity.explain)}"
-        decision = determine_routing(ctx)
+        operational_memory_hit = bool(affinity.sender_affinity_hit or affinity.thread_affinity_hit)
+        decision = determine_routing(
+            ctx,
+            sender_affinity_hit=affinity.sender_affinity_hit,
+            thread_affinity_hit=affinity.thread_affinity_hit,
+            confidence_boost_hit=affinity.confidence_boost_hit,
+            operational_memory_hit=operational_memory_hit,
+        )
         parse_success = True
         row = {
             "message_id": m.message_id,
@@ -110,12 +117,17 @@ def main() -> int:
             "raw_response_preview": classifier.last_raw_response_preview,
             "inbox_retention_reason": (ctx.inbox_retention_reason or decision.matched_rule) if decision.action == "KEEP" and decision.target_folder == "Inbox" else "",
             "suggested_review_folder": ctx.suggested_review_folder or ("AI Sorted/Needs Review" if decision.target_folder == "AI Sorted/Needs Review" else ""),
+            "needs_review_override_explainer": (
+                "operational_memory_insufficient=" + str(not operational_memory_hit) + "; "
+                + "override_not_triggered=" + str(decision.target_folder == "AI Sorted/Needs Review")
+            ) if decision.target_folder == "AI Sorted/Needs Review" else "",
             "routing_policy_reason": decision.matched_rule,
             "affinity_explainability": "; ".join(affinity.explain or []),
             "sender_affinity_hit": affinity.sender_affinity_hit,
             "thread_affinity_hit": affinity.thread_affinity_hit,
             "normalization_hit": affinity.normalization_hit,
             "confidence_boost_hit": affinity.confidence_boost_hit,
+            "operational_memory_hit": operational_memory_hit,
             "would_flag_followup": bool(ctx.clear_action_for_user and (ctx.waiting_on_me or ctx.follow_up_required or ctx.action_required)),
             "followup_flag_applied": False,
         }
@@ -146,6 +158,10 @@ def main() -> int:
             for reason in sorted({r.get("routing_policy_reason") for r in actions if r["target_folder"] == "AI Sorted/Needs Review"})
         },
         "informational_routed_count": sum(1 for r in actions if "informational" in (r.get("routing_policy_reason") or "")),
+        "operational_routing_override_count": sum(1 for r in actions if "operational_override" in (r.get("routing_policy_reason") or "") or "operational_memory_affinity_override" in (r.get("routing_policy_reason") or "")),
+        "informational_override_count": sum(1 for r in actions if "informational" in (r.get("routing_policy_reason") or "") or "cc_informational" in (r.get("routing_policy_reason") or "")),
+        "customer_affinity_routed_count": sum(1 for r in actions if r.get("sender_affinity_hit") and str(r.get("target_folder", "")).startswith("AI Sorted/Customers/")),
+        "project_affinity_routed_count": sum(1 for r in actions if r.get("thread_affinity_hit") and str(r.get("target_folder", "")).startswith("AI Sorted/Projects/")),
         "cc_only_routed_count": sum(1 for r in actions if "cc" in " ".join((r.get("action_summary") or "", r.get("routing_policy_reason") or "")).lower()),
         "sender_affinity_hits": sum(1 for r in actions if r.get("sender_affinity_hit")),
         "thread_affinity_hits": sum(1 for r in actions if r.get("thread_affinity_hit")),
