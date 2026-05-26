@@ -83,14 +83,18 @@ def main() -> int:
             "parse_success": parse_success,
             "schema_validation_success": True,
             "needs_user_attention": ctx.needs_user_attention,
+            "clear_action_for_user": ctx.clear_action_for_user,
+            "should_leave_in_inbox": ctx.clear_action_for_user,
             "waiting_on_me": ctx.waiting_on_me,
             "follow_up_required": ctx.follow_up_required,
             "urgency": ctx.urgency,
             "action_summary": ctx.action_summary,
             "retry_on_invalid_schema": retried,
             "raw_response_preview": classifier.last_raw_response_preview,
-            "inbox_retention_reason": decision.matched_rule if decision.action == "KEEP" and decision.target_folder == "Inbox" else "",
-            "would_flag_followup": bool(ctx.waiting_on_me or ctx.follow_up_required),
+            "inbox_retention_reason": (ctx.inbox_retention_reason or decision.matched_rule) if decision.action == "KEEP" and decision.target_folder == "Inbox" else "",
+            "suggested_review_folder": ctx.suggested_review_folder or ("AI Sorted/Needs Review" if decision.target_folder == "AI Sorted/Needs Review" else ""),
+            "routing_policy_reason": decision.matched_rule,
+            "would_flag_followup": bool(ctx.clear_action_for_user and (ctx.waiting_on_me or ctx.follow_up_required or ctx.action_required)),
             "followup_flag_applied": False,
         }
         if row["would_flag_followup"] and args.apply and followup_flag_mode == "apply":
@@ -100,6 +104,15 @@ def main() -> int:
             client.move_message(m.message_id, decision.target_folder, apply_enabled=True)
 
     write_action_reports([r for r in actions if r.get("waiting_on_me") or r.get("follow_up_required")])
+    metrics = {
+        "inbox_retained_count": sum(1 for r in actions if r["target_folder"] == "Inbox"),
+        "moved_to_customer_count": sum(1 for r in actions if r["target_folder"].startswith("AI Sorted/Customers/")),
+        "moved_to_project_count": sum(1 for r in actions if r["target_folder"].startswith("AI Sorted/Projects/")),
+        "moved_to_needs_review_count": sum(1 for r in actions if r["target_folder"] == "AI Sorted/Needs Review"),
+        "flagged_followup_count": sum(1 for r in actions if r.get("would_flag_followup")),
+        "over_conservative_warnings": int(all(r["target_folder"] == "Inbox" for r in actions)) if actions else 0,
+    }
+    (Path("reports") / "routing_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     return 0
 
 

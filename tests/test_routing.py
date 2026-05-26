@@ -49,7 +49,7 @@ def test_project_fysa_moves_to_projects():
 
 
 def test_action_request_kept_inbox():
-    d = determine_routing(ctx(waiting_on_me=True, operational_class="PROJECT", project="ASPI"))
+    d = determine_routing(ctx(waiting_on_me=True, clear_action_for_user=True, action_summary="Need your approval by Friday", operational_class="PROJECT", project="ASPI"))
     assert d.target_folder == "Inbox"
 
 
@@ -76,5 +76,20 @@ def test_weak_project_inference_to_needs_review():
 
 def test_weak_action_inference_prefers_needs_review():
     d = determine_routing(ctx(action_required=True, confidence=0.6))
+    assert d.target_folder == "AI Sorted/Needs Review"
+    assert d.matched_rule == "action_required_but_vague"
+
+
+def test_direct_ask_with_summary_keeps_inbox():
+    d = determine_routing(ctx(action_required=True, clear_action_for_user=True, action_summary="Can you send deck by Friday?", confidence=0.95))
     assert d.target_folder == "Inbox"
-    assert d.matched_rule == "action_required"
+
+
+def test_customer_fysa_moves_to_customer_folder():
+    d = determine_routing(ctx(operational_class="CUSTOMER", customer_or_org="Acme", clear_action_for_user=False, action_summary=None))
+    assert d.target_folder == "AI Sorted/Customers/Acme"
+
+
+def test_low_confidence_unknown_moves_needs_review():
+    d = determine_routing(ctx(operational_class="UNKNOWN", confidence=0.3))
+    assert d.target_folder == "AI Sorted/Needs Review"
