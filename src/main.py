@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--confirm-apply", default="")
     p.add_argument("--max-body-preview-chars", type=int, default=500)
     p.add_argument("--preflight-only", action="store_true")
+    p.add_argument("--test-move", action="store_true")
     return p
 
 
@@ -56,13 +57,16 @@ def main() -> int:
     if args.apply and args.confirm_apply != "MOVE_EMAILS":
         raise RuntimeError('For --apply you must pass --confirm-apply "MOVE_EMAILS" exactly.')
 
-    classifier = OpenWebUIClassifier()
     client = OutlookClient(Path("scripts"))
+    client.preflight_permission_check()
+    if args.test_move:
+        print(client.debug_test_move())
+        return 0
+    classifier = OpenWebUIClassifier()
     op_memory = OperationalMemory(Path("data/triage_cache.db"))
     followup_flag_mode = os.getenv("FOLLOWUP_FLAG_MODE", "report_only").strip().lower() or "report_only"
     if followup_flag_mode not in {"apply", "report_only"}:
         followup_flag_mode = "report_only"
-    client.preflight_permission_check()
     classifier.preflight_check()
     if args.preflight_only:
         return 0

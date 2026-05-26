@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -45,14 +46,31 @@ class OutlookClient:
 
     def _run_script(self, script_name: str, *args: str) -> str:
         script_path = self.scripts_dir / script_name
-        result = subprocess.run(
-            ["osascript", str(script_path), *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=True,
-        )
+        cmd = ["osascript", str(script_path), *args]
+        debug_outlook = (os.getenv("DEBUG_OUTLOOK", "").strip().lower() in {"1", "true", "yes", "on"})
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stdout = self._sanitize_applescript_output(exc.stdout or "")
+            stderr = self._sanitize_applescript_output(exc.stderr or "")
+            logging.error("AppleScript failed [%s] rc=%s", script_name, exc.returncode)
+            logging.error("AppleScript command: %s", " ".join(cmd))
+            logging.error("AppleScript stdout: %s", stdout.strip() or "<empty>")
+            logging.error("AppleScript stderr: %s", stderr.strip() or "<empty>")
+            if debug_outlook:
+                print(f"[DEBUG_OUTLOOK] script={script_name} rc={exc.returncode}")
+                print(f"[DEBUG_OUTLOOK] stdout={stdout.strip() or '<empty>'}")
+                print(f"[DEBUG_OUTLOOK] stderr={stderr.strip() or '<empty>'}")
+            raise
         raw = result.stdout or ""
+        if debug_outlook and (result.stderr or "").strip():
+            print(f"[DEBUG_OUTLOOK] stderr={self._sanitize_applescript_output(result.stderr).strip()}")
         logging.debug("AppleScript raw output [%s]: %r", script_name, raw[:500])
         return self._sanitize_applescript_output(raw).strip()
 
@@ -121,6 +139,9 @@ class OutlookClient:
         if not apply_enabled:
             raise OutlookSafetyError("Live moves are disabled by configuration.")
         self._run_script("outlook_move_message.applescript", message_id, target_folder)
+
+    def debug_test_move(self) -> str:
+        return self._run_script("outlook_debug_move.applescript")
 
     def try_apply_followup_flag(self, message_id: str, apply_enabled: bool) -> bool:
         if not apply_enabled:
