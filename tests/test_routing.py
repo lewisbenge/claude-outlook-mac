@@ -99,3 +99,44 @@ def test_customer_fysa_moves_to_customer_folder():
 def test_low_confidence_unknown_moves_needs_review():
     d = determine_routing(ctx(operational_class="UNKNOWN", confidence=0.3))
     assert d.target_folder == "AI Sorted/Needs Review"
+
+def test_informational_with_operational_memory_routes_project():
+    d = determine_routing(
+        ctx(operational_class="PROJECT", project="Orion", confidence=0.42, topics=["weekly update", "fysa"]),
+        sender_affinity_hit=True,
+        thread_affinity_hit=True,
+        confidence_boost_hit=True,
+        operational_memory_hit=True,
+    )
+    assert d.target_folder == "AI Sorted/Projects/Orion"
+    assert d.matched_rule == "operational_memory_affinity_override"
+
+
+def test_recurring_sender_affinity_bypasses_needs_review():
+    d = determine_routing(
+        ctx(operational_class="CUSTOMER", customer_or_org="Acme", confidence=0.4),
+        sender_affinity_hit=True,
+        confidence_boost_hit=True,
+        operational_memory_hit=True,
+    )
+    assert d.target_folder == "AI Sorted/Customers/Acme"
+
+
+def test_cc_only_informational_update_bypasses_needs_review():
+    d = determine_routing(
+        ctx(operational_class="PROJECT", project="Athena", confidence=0.35, topics=["cc-only", "minutes"]),
+        thread_affinity_hit=True,
+        confidence_boost_hit=True,
+        operational_memory_hit=True,
+    )
+    assert d.target_folder == "AI Sorted/Projects/Athena"
+
+
+def test_weak_but_repeated_affinity_prefers_routing():
+    d = determine_routing(
+        ctx(operational_class="CUSTOMER", customer_or_org="Medium Co", confidence=0.45),
+        sender_affinity_hit=True,
+        operational_memory_hit=True,
+        confidence_boost_hit=True,
+    )
+    assert d.target_folder == "AI Sorted/Customers/Medium_Co"
