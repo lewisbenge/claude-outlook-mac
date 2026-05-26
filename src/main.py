@@ -85,6 +85,7 @@ def main() -> int:
             "urgency": ctx.urgency,
             "action_summary": ctx.action_summary,
             "retry_on_invalid_schema": retried,
+            "raw_response_preview": classifier.last_raw_response_preview,
         }
         actions.append(row)
         if args.apply and decision.action == "MOVE" and decision.target_folder.startswith("AI Sorted/"):
