@@ -45,6 +45,19 @@ INVITE_PATTERNS = [
     re.compile(r"meeting|invite|invitation|calendar", re.I),
     re.compile(r"teams meeting|zoom meeting|google meet", re.I),
 ]
+ACTION_PHRASES = [
+    re.compile(r"\bcan you\b", re.I),
+    re.compile(r"\bplease provide\b", re.I),
+    re.compile(r"\bneed your review\b", re.I),
+    re.compile(r"\baction:\b", re.I),
+    re.compile(r"\bcould you\b", re.I),
+    re.compile(r"\bby (eod|tomorrow|[a-z]+\s+\d{1,2})\b", re.I),
+]
+INFORMATIONAL_PHRASES = [
+    re.compile(r"\bfysa\b", re.I),
+    re.compile(r"\bfor your awareness\b", re.I),
+    re.compile(r"\bcustomer update\b", re.I),
+]
 
 
 @dataclass
@@ -341,6 +354,8 @@ def heuristic_classify(message: dict, invite_mode: str) -> TriageOutcome | None:
     sender = (message.get("sender") or "")
     body_preview = (message.get("body_preview") or "")
     combined = f"{subject} {sender} {body_preview}"
+    cc = (message.get("cc") or "")
+    recipients = (message.get("recipients") or "")
     sender_domain = sender.split("@")[-1].lower() if "@" in sender else ""
 
     def _csv_set(name: str) -> set[str]:
@@ -377,6 +392,23 @@ def heuristic_classify(message: dict, invite_mode: str) -> TriageOutcome | None:
             routing_source="protected_sender_domain",
             inherited_from_sender=True,
             heuristic_match="protected_sender_domain",
+        )
+    informational_hit = any(p.search(combined) for p in INFORMATIONAL_PHRASES)
+    action_hits = [p.pattern for p in ACTION_PHRASES if p.search(combined)]
+    cc_only_info = informational_hit and sender and recipients and sender.lower() not in recipients.lower()
+    if informational_hit and not action_hits:
+        return TriageOutcome(
+            Classification("NEEDS_REVIEW", "AI Sorted/Needs Review", 0.7, explain("Informational email without direct ask", "informational_only", "|".join(action_hits) or "none", "subject_or_body", protected_reason), True),
+            "heuristic",
+            routing_source="informational",
+            heuristic_match="cc_informational" if cc_only_info else "informational_only",
+        )
+    if action_hits:
+        return TriageOutcome(
+            Classification("NEEDS_REVIEW", "Inbox", 0.88, explain("Action phrase detected", "direct_ask", "|".join(action_hits), "subject_or_body", protected_reason), True),
+            "heuristic",
+            routing_source="action_detection",
+            heuristic_match="direct_ask",
         )
     for klass, rule_name, pat, folder in OPERATIONAL_ROUTING_RULES:
         if pat.search(combined):

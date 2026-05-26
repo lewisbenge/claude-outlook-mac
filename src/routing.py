@@ -7,7 +7,12 @@ from src.models import EmailOperationalContext
 
 ORG_NORMALIZATION = {
     "lnic pty ltd": "LNIC",
+    "lnic": "LNIC",
     "melco resorts": "Melco",
+    "melco resorts & entertainment": "Melco",
+    "melco": "Melco",
+    "lnic.com.au": "LNIC",
+    "melco-resorts.com": "Melco",
 }
 
 
@@ -25,19 +30,32 @@ def normalize_name(value: str | None) -> str | None:
     key = value.strip().lower()
     if key in ORG_NORMALIZATION:
         return ORG_NORMALIZATION[key]
+    key = re.sub(r"^https?://", "", key)
+    key = key.replace("www.", "")
+    if key in ORG_NORMALIZATION:
+        return ORG_NORMALIZATION[key]
     value = re.sub(r"[^A-Za-z0-9_ -]", "", value).strip()
     return value.replace(" ", "_")
 
 
 def determine_routing(ctx: EmailOperationalContext) -> RoutingDecision:
     if ctx.waiting_on_me:
-        return RoutingDecision("KEEP", "Inbox", "deterministic", "waiting_on_me")
-    if ctx.follow_up_required:
-        return RoutingDecision("KEEP", "Inbox", "deterministic", "follow_up_required")
+        return RoutingDecision("KEEP", "Inbox", "deterministic", "waiting_on_me:direct_tasking")
+    if ctx.follow_up_required and ctx.action_required:
+        return RoutingDecision("KEEP", "Inbox", "deterministic", "follow_up_required:direct_tasking")
+
+    if ctx.action_required and ctx.confidence < 0.7:
+        return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "weak_action_inference")
+
     if ctx.operational_class == "CUSTOMER" and ctx.customer_or_org:
-        return RoutingDecision("MOVE", f"AI Sorted/Customers/{normalize_name(ctx.customer_or_org)}", "deterministic", "customer_no_action")
+        customer = normalize_name(ctx.customer_or_org)
+        return RoutingDecision("MOVE", f"AI Sorted/Customers/{customer}", "deterministic", "customer_no_action:normalized_org")
+
     if ctx.operational_class == "PROJECT" and ctx.project:
+        if ctx.confidence < 0.75:
+            return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "weak_project_inference")
         return RoutingDecision("MOVE", f"AI Sorted/Projects/{normalize_name(ctx.project)}", "deterministic", "project_no_action")
+
     if ctx.operational_class == "TRAVEL":
         return RoutingDecision("MOVE", "AI Sorted/Travel", "deterministic", "travel")
     if ctx.operational_class == "CALENDAR":
@@ -46,4 +64,4 @@ def determine_routing(ctx: EmailOperationalContext) -> RoutingDecision:
         return RoutingDecision("MOVE", "AI Sorted/Finance", "deterministic", "finance")
     if ctx.operational_class in {"NEWSLETTER", "AUTOMATION", "SALES_SPAM"} and ctx.confidence >= 0.9:
         return RoutingDecision("MOVE", "AI Sorted/Delete", "deterministic", "low_value_high_confidence")
-    return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "fallback_needs_review")
+    return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "fallback_needs_review:insufficient_signals")
