@@ -67,3 +67,24 @@ def test_list_inbox_messages_unicode_roundtrip(monkeypatch):
     msgs = client.list_inbox_messages()
     assert msgs[0].subject == "こんにちは"
     assert msgs[0].sender == "汤𠮷"
+
+
+def test_run_script_logs_stdout_stderr_on_failure(monkeypatch, caplog):
+    client = OutlookClient(Path("scripts"))
+
+    def fake_run(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, ["osascript"], output="boom out", stderr="boom err")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        client._run_script("outlook_move_message.applescript", "id", "AI Sorted/Test")
+
+    assert "AppleScript stdout: boom out" in caplog.text
+    assert "AppleScript stderr: boom err" in caplog.text
+
+
+def test_move_script_ensures_folder_resolution_steps_exist():
+    text = Path("scripts/outlook_move_message.applescript").read_text(encoding="utf-8")
+    assert "ensureFolder(accountRef, \"AI Sorted\")" in text
+    assert "ensureFolder(aiSortedFolder, leafName)" in text
+    assert "subject fallback failed" in text

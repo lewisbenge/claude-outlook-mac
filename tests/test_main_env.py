@@ -17,6 +17,9 @@ class _FakeClient:
     def preflight_permission_check(self) -> None:
         pass
 
+    def debug_test_move(self) -> str:
+        return "OK"
+
 
 def test_env_loaded_before_openwebui_preflight(monkeypatch, tmp_path):
     env_path = tmp_path / ".env"
@@ -36,3 +39,28 @@ def test_env_loaded_before_openwebui_preflight(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", ["prog", "--preflight-only"])
 
     assert app_main.main() == 0
+
+
+def test_test_move_mode_runs_without_classifier(monkeypatch, capsys):
+    monkeypatch.setattr(app_main, "initialize_environment", lambda *_args, **_kwargs: None)
+
+    class _Client:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def preflight_permission_check(self) -> None:
+            pass
+
+        def debug_test_move(self) -> str:
+            return "debug-output"
+
+    class _Classifier:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise AssertionError("classifier should not be initialized for --test-move")
+
+    monkeypatch.setattr(app_main, "OutlookClient", _Client)
+    monkeypatch.setattr(app_main, "OpenWebUIClassifier", _Classifier)
+    monkeypatch.setattr("sys.argv", ["prog", "--test-move"])
+
+    assert app_main.main() == 0
+    assert "debug-output" in capsys.readouterr().out
