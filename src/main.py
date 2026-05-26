@@ -57,6 +57,9 @@ def main() -> int:
 
     classifier = OpenWebUIClassifier()
     client = OutlookClient(Path("scripts"))
+    followup_flag_mode = os.getenv("FOLLOWUP_FLAG_MODE", "report_only").strip().lower() or "report_only"
+    if followup_flag_mode not in {"apply", "report_only"}:
+        followup_flag_mode = "report_only"
     client.preflight_permission_check()
     classifier.preflight_check()
     if args.preflight_only:
@@ -86,10 +89,15 @@ def main() -> int:
             "action_summary": ctx.action_summary,
             "retry_on_invalid_schema": retried,
             "raw_response_preview": classifier.last_raw_response_preview,
+            "inbox_retention_reason": decision.matched_rule if decision.action == "KEEP" and decision.target_folder == "Inbox" else "",
+            "would_flag_followup": bool(ctx.waiting_on_me or ctx.follow_up_required),
+            "followup_flag_applied": False,
         }
+        if row["would_flag_followup"] and args.apply and followup_flag_mode == "apply":
+            row["followup_flag_applied"] = client.try_apply_followup_flag(m.message_id, apply_enabled=True)
         actions.append(row)
         if args.apply and decision.action == "MOVE" and decision.target_folder.startswith("AI Sorted/"):
-            client.move_message(m.message_id, decision.target_folder)
+            client.move_message(m.message_id, decision.target_folder, apply_enabled=True)
 
     write_action_reports([r for r in actions if r.get("waiting_on_me") or r.get("follow_up_required")])
     return 0
