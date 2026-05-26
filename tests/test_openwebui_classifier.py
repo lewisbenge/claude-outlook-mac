@@ -88,3 +88,30 @@ def test_missing_optional_fields_ok():
     assert retried is False
     assert ctx.operational_class == "ADMIN"
     assert ctx.urgency == "LOW"
+
+
+def test_missing_required_field_retries_once_then_succeeds():
+    c = OpenWebUIClassifier(base_url="http://x", model="gpt-4o")
+    missing_required = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"urgency":"LOW","confidence":0.5,"reason":"x","topics":[]}'
+                }
+            }
+        ]
+    }
+    good = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"operational_class":"ADMIN","urgency":"LOW","confidence":0.5,"reason":"x","topics":[]}'
+                }
+            }
+        ]
+    }
+
+    with patch.object(c, "_request", side_effect=[missing_required, good]):
+        ctx, retried = c.classify(EmailInput(subject="s", sender="a@b.com"))
+    assert retried is True
+    assert ctx.operational_class == "ADMIN"
