@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from src.openwebui_classifier import EmailInput, OpenWebUIClassifier
 from src.outlook_client import OutlookClient
+from src.operational_memory import OperationalMemory
 from src.routing import determine_routing
 
 
@@ -57,6 +58,7 @@ def main() -> int:
 
     classifier = OpenWebUIClassifier()
     client = OutlookClient(Path("scripts"))
+    op_memory = OperationalMemory(Path("data/triage_cache.db"))
     followup_flag_mode = os.getenv("FOLLOWUP_FLAG_MODE", "report_only").strip().lower() or "report_only"
     if followup_flag_mode not in {"apply", "report_only"}:
         followup_flag_mode = "report_only"
@@ -69,6 +71,21 @@ def main() -> int:
     actions = []
     for m in messages:
         ctx, retried = classifier.classify(EmailInput(subject=m.subject, sender=m.sender, recipients=m.recipients, cc=m.cc, body_preview=m.body_preview[: args.max_body_preview_chars]))
+        affinity = op_memory.score(
+            sender=m.sender,
+            subject=m.subject,
+            body_preview=m.body_preview[: args.max_body_preview_chars],
+            participants="|".join(sorted({p.strip().lower() for p in f'{m.sender},{m.recipients},{m.cc}'.split(',') if p.strip()})),
+            ctx=ctx,
+        )
+        if affinity.normalized_org and not ctx.customer_or_org:
+            ctx.customer_or_org = affinity.normalized_org
+        if affinity.normalized_project and not ctx.project:
+            ctx.project = affinity.normalized_project
+        if affinity.boosted_confidence > ctx.confidence:
+            ctx.confidence = affinity.boosted_confidence
+            if affinity.explain:
+                ctx.reason = f"{ctx.reason}; confidence boost via operational memory: {'; '.join(affinity.explain)}"
         decision = determine_routing(ctx)
         parse_success = True
         row = {
@@ -94,6 +111,11 @@ def main() -> int:
             "inbox_retention_reason": (ctx.inbox_retention_reason or decision.matched_rule) if decision.action == "KEEP" and decision.target_folder == "Inbox" else "",
             "suggested_review_folder": ctx.suggested_review_folder or ("AI Sorted/Needs Review" if decision.target_folder == "AI Sorted/Needs Review" else ""),
             "routing_policy_reason": decision.matched_rule,
+            "affinity_explainability": "; ".join(affinity.explain or []),
+            "sender_affinity_hit": affinity.sender_affinity_hit,
+            "thread_affinity_hit": affinity.thread_affinity_hit,
+            "normalization_hit": affinity.normalization_hit,
+            "confidence_boost_hit": affinity.confidence_boost_hit,
             "would_flag_followup": bool(ctx.clear_action_for_user and (ctx.waiting_on_me or ctx.follow_up_required or ctx.action_required)),
             "followup_flag_applied": False,
         }
@@ -102,6 +124,16 @@ def main() -> int:
         actions.append(row)
         if args.apply and decision.action == "MOVE" and decision.target_folder.startswith("AI Sorted/"):
             client.move_message(m.message_id, decision.target_folder, apply_enabled=True)
+        op_memory.store_outcome(
+            message_id=m.message_id,
+            sender=m.sender,
+            subject=m.subject,
+            body_preview=m.body_preview[: args.max_body_preview_chars],
+            participants="|".join(sorted({p.strip().lower() for p in f'{m.sender},{m.recipients},{m.cc}'.split(',') if p.strip()})),
+            ctx=ctx,
+            target_folder=decision.target_folder,
+            source=decision.routing_source,
+        )
 
     write_action_reports([r for r in actions if r.get("waiting_on_me") or r.get("follow_up_required")])
     metrics = {
@@ -115,8 +147,12 @@ def main() -> int:
         },
         "informational_routed_count": sum(1 for r in actions if "informational" in (r.get("routing_policy_reason") or "")),
         "cc_only_routed_count": sum(1 for r in actions if "cc" in " ".join((r.get("action_summary") or "", r.get("routing_policy_reason") or "")).lower()),
-        "operational_memory_hits": sum(1 for r in actions if r.get("routing_source") in {"thread_affinity", "sender_affinity", "historical_affinity"}),
-        "confidence_boost_hits": sum(1 for r in actions if "boost" in (r.get("routing_policy_reason") or "")),
+        "sender_affinity_hits": sum(1 for r in actions if r.get("sender_affinity_hit")),
+        "thread_affinity_hits": sum(1 for r in actions if r.get("thread_affinity_hit")),
+        "normalization_hits": sum(1 for r in actions if r.get("normalization_hit")),
+        "confidence_boost_hits": sum(1 for r in actions if r.get("confidence_boost_hit")),
+        "operational_memory_hits": sum(1 for r in actions if r.get("sender_affinity_hit") or r.get("thread_affinity_hit")),
+        "needs_review_reduction": sum(1 for r in actions if r.get("confidence_boost_hit") and r["target_folder"] != "AI Sorted/Needs Review"),
         "flagged_followup_count": sum(1 for r in actions if r.get("would_flag_followup")),
         "over_conservative_warnings": int(all(r["target_folder"] == "Inbox" for r in actions)) if actions else 0,
     }
