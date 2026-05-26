@@ -23,6 +23,78 @@ class OpenWebUIClassifier:
         self.api_key = api_key or os.getenv("OPENWEBUI_API_KEY", "")
         self.model = model or os.getenv("OPENWEBUI_MODEL", "")
         self.last_raw_response_preview = ""
+        self.last_http_status = "unknown"
+
+    @staticmethod
+    def _safe_unknown_context(reason: str) -> EmailOperationalContext:
+        return EmailOperationalContext.from_dict(
+            {
+                "operational_class": "UNKNOWN",
+                "needs_user_attention": True,
+                "follow_up_required": True,
+                "action_required": False,
+                "urgency": "LOW",
+                "waiting_on_me": True,
+                "waiting_on_external": False,
+                "confidence": 0.0,
+                "reason": reason,
+                "topics": ["needs_review"],
+            }
+        )
+
+    @staticmethod
+    def _extract_first_json_object(content: str) -> str | None:
+        start = content.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_string = False
+        escaped = False
+        for idx in range(start, len(content)):
+            ch = content[idx]
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return content[start : idx + 1]
+        return None
+
+    def _parse_context_with_fallback(self, content: str) -> tuple[EmailOperationalContext | None, str | None]:
+        try:
+            return EmailOperationalContext.from_dict(json.loads(content)), None
+        except Exception as direct_error:
+            extracted = self._extract_first_json_object(content)
+            if extracted:
+                try:
+                    return EmailOperationalContext.from_dict(json.loads(extracted)), None
+                except Exception as extracted_error:
+                    return None, f"direct parse failed: {direct_error}; extracted parse failed: {extracted_error}"
+            return None, f"direct parse failed: {direct_error}; no balanced JSON object found"
+
+    def _response_diag(self, out: dict, content: str | None) -> None:
+        response_keys = list(out.keys()) if isinstance(out, dict) else []
+        choices = out.get("choices") if isinstance(out, dict) else None
+        choices_len = len(choices) if isinstance(choices, list) else 0
+        finish_reason = None
+        if choices_len > 0 and isinstance(choices[0], dict):
+            finish_reason = choices[0].get("finish_reason")
+        preview = "" if content is None else content[:200].replace("\n", "\\n")
+        print(
+            f"[openwebui] http_status={self.last_http_status} response_keys={response_keys} choices_len={choices_len} "
+            f"finish_reason={finish_reason} content_preview={preview!r}"
+        )
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -31,6 +103,7 @@ class OpenWebUIClassifier:
         if self.api_key:
             req.add_header("Authorization", f"Bearer {self.api_key}")
         with urllib.request.urlopen(req, timeout=45) as resp:
+            self.last_http_status = str(getattr(resp, "status", "unknown"))
             return json.loads(resp.read().decode("utf-8"))
 
     def preflight_check(self) -> None:
@@ -52,11 +125,27 @@ class OpenWebUIClassifier:
         }
         for attempt in range(2):
             out = self._request("POST", "/api/chat/completions", payload)
-            content = out["choices"][0]["message"]["content"]
+            choices = out.get("choices") if isinstance(out, dict) else None
+            first_choice = choices[0] if isinstance(choices, list) and choices else {}
+            message = first_choice.get("message", {}) if isinstance(first_choice, dict) else {}
+            content = message.get("content") if isinstance(message, dict) else None
+            self._response_diag(out if isinstance(out, dict) else {}, content)
+            if content is None:
+                if attempt == 0:
+                    continue
+                return self._safe_unknown_context("OpenWebUI response missing message/content after retry"), True
+
+            content = content.strip()
             self.last_raw_response_preview = content[:1000]
-            try:
-                return EmailOperationalContext.from_dict(json.loads(content)), attempt == 1
-            except Exception:
-                if attempt == 1:
-                    raise
-        raise RuntimeError("unreachable")
+            if not content:
+                if attempt == 0:
+                    continue
+                return self._safe_unknown_context("OpenWebUI returned empty content after retry"), True
+
+            parsed, parse_error = self._parse_context_with_fallback(content)
+            if parsed is not None:
+                return parsed, attempt == 1
+            if attempt == 0:
+                continue
+            return self._safe_unknown_context(f"OpenWebUI parse failure: {parse_error}"), True
+        return self._safe_unknown_context("OpenWebUI classification failed unexpectedly"), True

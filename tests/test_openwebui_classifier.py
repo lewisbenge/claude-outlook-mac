@@ -115,3 +115,70 @@ def test_missing_required_field_retries_once_then_succeeds():
         ctx, retried = c.classify(EmailInput(subject="s", sender="a@b.com"))
     assert retried is True
     assert ctx.operational_class == "ADMIN"
+
+
+def test_empty_content_retries_then_fallback_unknown():
+    c = OpenWebUIClassifier(base_url="http://x", model="gpt-4o")
+    out = {"choices": [{"message": {"content": ""}}]}
+    with patch.object(c, "_request", side_effect=[out, out]):
+        ctx, retried = c.classify(EmailInput(subject="s", sender="a@b.com"))
+    assert retried is True
+    assert ctx.operational_class == "UNKNOWN"
+    assert "empty content" in ctx.reason
+
+
+def test_whitespace_content_retries_then_fallback_unknown():
+    c = OpenWebUIClassifier(base_url="http://x", model="gpt-4o")
+    out = {"choices": [{"message": {"content": "  \n\t  "}}]}
+    with patch.object(c, "_request", side_effect=[out, out]):
+        ctx, retried = c.classify(EmailInput(subject="s", sender="a@b.com"))
+    assert retried is True
+    assert ctx.operational_class == "UNKNOWN"
+    assert "empty content" in ctx.reason
+
+
+def test_prose_before_json_parses_with_balanced_extraction():
+    c = OpenWebUIClassifier(base_url="http://x", model="gpt-4o")
+    out = {
+        "choices": [
+            {
+                "message": {
+                    "content": 'Here is the result: {"operational_class":"PROJECT","urgency":"LOW","confidence":0.8,"reason":"ok","topics":["p"]}'
+                }
+            }
+        ]
+    }
+    with patch.object(c, "_request", return_value=out):
+        ctx, retried = c.classify(EmailInput(subject="s", sender="a@b.com"))
+    assert retried is False
+    assert ctx.operational_class == "PROJECT"
+
+
+def test_malformed_json_retries_then_fallback_unknown():
+    c = OpenWebUIClassifier(base_url="http://x", model="gpt-4o")
+    out = {"choices": [{"message": {"content": '{"operational_class": "ADMIN"'}}]}
+    with patch.object(c, "_request", side_effect=[out, out]):
+        ctx, retried = c.classify(EmailInput(subject="s", sender="a@b.com"))
+    assert retried is True
+    assert ctx.operational_class == "UNKNOWN"
+    assert "parse failure" in ctx.reason
+
+
+def test_response_with_no_choices_fallback_unknown():
+    c = OpenWebUIClassifier(base_url="http://x", model="gpt-4o")
+    out = {"choices": []}
+    with patch.object(c, "_request", side_effect=[out, out]):
+        ctx, retried = c.classify(EmailInput(subject="s", sender="a@b.com"))
+    assert retried is True
+    assert ctx.operational_class == "UNKNOWN"
+    assert "missing message/content" in ctx.reason
+
+
+def test_response_missing_message_content_fallback_unknown():
+    c = OpenWebUIClassifier(base_url="http://x", model="gpt-4o")
+    out = {"choices": [{"message": {}}]}
+    with patch.object(c, "_request", side_effect=[out, out]):
+        ctx, retried = c.classify(EmailInput(subject="s", sender="a@b.com"))
+    assert retried is True
+    assert ctx.operational_class == "UNKNOWN"
+    assert "missing message/content" in ctx.reason
