@@ -41,11 +41,14 @@ def normalize_name(value: str | None) -> str | None:
 def determine_routing(ctx: EmailOperationalContext) -> RoutingDecision:
     if ctx.waiting_on_me:
         return RoutingDecision("KEEP", "Inbox", "deterministic", "waiting_on_me:direct_tasking")
-    if ctx.follow_up_required and ctx.action_required:
-        return RoutingDecision("KEEP", "Inbox", "deterministic", "follow_up_required:direct_tasking")
+    if ctx.follow_up_required:
+        return RoutingDecision("KEEP", "Inbox", "deterministic", "follow_up_required")
+    if ctx.action_required:
+        return RoutingDecision("KEEP", "Inbox", "deterministic", "action_required")
+    if ctx.needs_user_attention:
+        return RoutingDecision("KEEP", "Inbox", "deterministic", "needs_user_attention")
 
-    if ctx.action_required and ctx.confidence < 0.7:
-        return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "weak_action_inference")
+    # Deterministic override: non-action emails must route out of Inbox.
 
     if ctx.operational_class == "CUSTOMER" and ctx.customer_or_org:
         customer = normalize_name(ctx.customer_or_org)

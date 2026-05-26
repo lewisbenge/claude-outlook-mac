@@ -33,9 +33,19 @@ def test_customer_routing():
     assert d.target_folder == "AI Sorted/Customers/LNIC"
 
 
+def test_informational_customer_moves_out_of_inbox():
+    d = determine_routing(ctx(operational_class="CUSTOMER", customer_or_org="Acme Corp", action_required=False, follow_up_required=False, waiting_on_me=False))
+    assert d.target_folder == "AI Sorted/Customers/Acme_Corp"
+
+
 def test_project_routing():
     d = determine_routing(ctx(operational_class="PROJECT", project="Taiwan MND"))
     assert d.target_folder == "AI Sorted/Projects/Taiwan_MND"
+
+
+def test_project_fysa_moves_to_projects():
+    d = determine_routing(ctx(operational_class="PROJECT", project="FYSA Apollo", action_required=False))
+    assert d.target_folder == "AI Sorted/Projects/FYSA_Apollo"
 
 
 def test_action_request_kept_inbox():
@@ -66,5 +76,5 @@ def test_weak_project_inference_to_needs_review():
 
 def test_weak_action_inference_prefers_needs_review():
     d = determine_routing(ctx(action_required=True, confidence=0.6))
-    assert d.target_folder == "AI Sorted/Needs Review"
-    assert d.matched_rule == "weak_action_inference"
+    assert d.target_folder == "Inbox"
+    assert d.matched_rule == "action_required"

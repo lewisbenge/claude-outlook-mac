@@ -122,6 +122,16 @@ class OutlookClient:
             raise OutlookSafetyError("Live moves are disabled by configuration.")
         self._run_script("outlook_move_message.applescript", message_id, target_folder)
 
+    def try_apply_followup_flag(self, message_id: str, apply_enabled: bool) -> bool:
+        if not apply_enabled:
+            return False
+        try:
+            out = self._run_script("outlook_set_followup_flag.applescript", message_id)
+            return out.strip().lower() == "ok"
+        except Exception as exc:
+            print(f"WARNING: follow-up flagging unsupported or failed: {exc}")
+            return False
+
 
     def try_mark_tentative(self, message_id: str) -> bool:
         try:
