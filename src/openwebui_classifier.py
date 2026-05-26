@@ -22,6 +22,7 @@ class OpenWebUIClassifier:
         self.base_url = (base_url or os.getenv("OPENWEBUI_BASE_URL", "")).rstrip("/")
         self.api_key = api_key or os.getenv("OPENWEBUI_API_KEY", "")
         self.model = model or os.getenv("OPENWEBUI_MODEL", "")
+        self.last_raw_response_preview = ""
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -45,13 +46,14 @@ class OpenWebUIClassifier:
             "model": self.model,
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": "You are a structured extraction API. Return only valid JSON matching schema. No prose or markdown."},
+                {"role": "system", "content": "You are a structured extraction API. Return only valid JSON with exactly these keys: operational_class, customer_or_org, project, needs_user_attention, action_required, follow_up_required, action_summary, urgency, waiting_on_me, waiting_on_external, deadline_detected, confidence, reason, topics. Do not include subject, sender, recipients, cc, body, or any other raw email metadata. No prose or markdown."},
                 {"role": "user", "content": f"subject:{email.subject}\nfrom:{email.sender}\nbody:{email.body_preview}"},
             ],
         }
         for attempt in range(2):
             out = self._request("POST", "/api/chat/completions", payload)
             content = out["choices"][0]["message"]["content"]
+            self.last_raw_response_preview = content[:1000]
             try:
                 return EmailOperationalContext.from_dict(json.loads(content)), attempt == 1
             except Exception:

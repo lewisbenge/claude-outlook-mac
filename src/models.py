@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 
 ALLOWED_CLASS = {
     "CUSTOMER","PROJECT","TRAVEL","CALENDAR","ADMIN","FINANCE","NEWSLETTER","AUTOMATION","SALES_SPAM","PERSONAL","UNKNOWN"
@@ -25,6 +26,10 @@ class EmailOperationalContext:
     reason: str = ""
     topics: list[str] = field(default_factory=list)
 
+    @classmethod
+    def allowed_fields(cls) -> set[str]:
+        return {f.name for f in dataclass_fields(cls)}
+
     def __post_init__(self) -> None:
         if self.operational_class not in ALLOWED_CLASS:
             raise ValueError("invalid operational_class")
@@ -35,4 +40,9 @@ class EmailOperationalContext:
 
     @classmethod
     def from_dict(cls, data: dict) -> "EmailOperationalContext":
-        return cls(**data)
+        filtered = {k: v for k, v in data.items() if k in cls.allowed_fields()}
+        if "operational_class" in filtered and filtered["operational_class"] not in ALLOWED_CLASS:
+            filtered["operational_class"] = "UNKNOWN"
+        if "urgency" in filtered and filtered["urgency"] not in ALLOWED_URGENCY:
+            filtered["urgency"] = "LOW"
+        return cls(**filtered)
