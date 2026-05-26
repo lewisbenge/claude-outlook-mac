@@ -40,6 +40,8 @@ class EmailOperationalContext:
 
     @classmethod
     def from_dict(cls, data: dict) -> "EmailOperationalContext":
+        if not isinstance(data, dict):
+            raise ValueError("schema payload must be an object")
         filtered = {k: v for k, v in data.items() if k in cls.allowed_fields()}
         if "operational_class" in filtered and filtered["operational_class"] not in ALLOWED_CLASS:
             filtered["operational_class"] = "UNKNOWN"
