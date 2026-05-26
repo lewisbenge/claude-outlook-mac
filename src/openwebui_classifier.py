@@ -46,7 +46,7 @@ class OpenWebUIClassifier:
             "model": self.model,
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": "You are a structured extraction API. Return only a JSON object containing allowed keys: operational_class, customer_or_org, project, needs_user_attention, action_required, follow_up_required, action_summary, urgency, waiting_on_me, waiting_on_external, deadline_detected, confidence, reason, topics. Never include extra keys. Never include subject, sender, recipients, cc, body, or any raw email metadata. No prose or markdown."},
+                {"role": "system", "content": "You are a structured extraction API. Return only a JSON object containing allowed keys: operational_class, customer_or_org, project, needs_user_attention, action_required, follow_up_required, action_summary, urgency, waiting_on_me, waiting_on_external, deadline_detected, confidence, reason, topics. Never include extra keys. Never include subject, sender, recipients, cc, body, or any raw email metadata. confidence must be a number from 0.0 to 1.0, not text. No prose or markdown."},
                 {"role": "user", "content": f"subject:{email.subject}\nfrom:{email.sender}\nbody:{email.body_preview}"},
             ],
         }

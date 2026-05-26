@@ -7,6 +7,7 @@ ALLOWED_CLASS = {
     "CUSTOMER","PROJECT","TRAVEL","CALENDAR","ADMIN","FINANCE","NEWSLETTER","AUTOMATION","SALES_SPAM","PERSONAL","UNKNOWN"
 }
 ALLOWED_URGENCY = {"LOW", "MEDIUM", "HIGH"}
+CONFIDENCE_TEXT_MAP = {"high": 0.9, "medium": 0.6, "low": 0.3}
 
 
 @dataclass
@@ -47,4 +48,25 @@ class EmailOperationalContext:
             filtered["operational_class"] = "UNKNOWN"
         if "urgency" in filtered and filtered["urgency"] not in ALLOWED_URGENCY:
             filtered["urgency"] = "LOW"
+        filtered["confidence"] = cls._normalize_confidence(filtered.get("confidence"))
         return cls(**filtered)
+
+    @staticmethod
+    def _normalize_confidence(raw_confidence: object) -> float:
+        if raw_confidence is None:
+            return 0.5
+
+        if isinstance(raw_confidence, str):
+            value = CONFIDENCE_TEXT_MAP.get(raw_confidence.strip().lower())
+            if value is None:
+                try:
+                    value = float(raw_confidence)
+                except (TypeError, ValueError):
+                    value = 0.5
+        else:
+            try:
+                value = float(raw_confidence)
+            except (TypeError, ValueError):
+                value = 0.5
+
+        return max(0.0, min(1.0, value))
