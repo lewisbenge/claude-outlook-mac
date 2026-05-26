@@ -118,8 +118,18 @@ def main() -> int:
             "inbox_retention_reason": (ctx.inbox_retention_reason or decision.matched_rule) if decision.action == "KEEP" and decision.target_folder == "Inbox" else "",
             "suggested_review_folder": ctx.suggested_review_folder or ("AI Sorted/Needs Review" if decision.target_folder == "AI Sorted/Needs Review" else ""),
             "needs_review_override_explainer": (
-                "operational_memory_insufficient=" + str(not operational_memory_hit) + "; "
-                + "override_not_triggered=" + str(decision.target_folder == "AI Sorted/Needs Review")
+                "operational_memory_insufficient_reason="
+                + (
+                    "no_sender_or_thread_affinity"
+                    if not operational_memory_hit
+                    else ("no_customer_or_project_target" if not (ctx.customer_or_org or ctx.project) else "conflicting_or_low_quality_signals")
+                )
+                + "; routing_override_not_triggered_reason="
+                + (
+                    "still_in_needs_review_due_to_" + (decision.matched_rule or "unknown")
+                    if decision.target_folder == "AI Sorted/Needs Review"
+                    else "not_applicable"
+                )
             ) if decision.target_folder == "AI Sorted/Needs Review" else "",
             "routing_policy_reason": decision.matched_rule,
             "affinity_explainability": "; ".join(affinity.explain or []),
