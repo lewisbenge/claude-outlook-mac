@@ -18,6 +18,10 @@ INFORMATIONAL_TOPIC_HINTS = {
     "distribution list",
     "cc-only",
     "cc only",
+    "meeting minute",
+    "weekly status",
+    "status",
+    "briefing",
 }
 
 ORG_NORMALIZATION = {
@@ -94,6 +98,12 @@ def determine_routing(
         if ctx.operational_class == "PROJECT" and ctx.project:
             return RoutingDecision("MOVE", f"AI Sorted/Projects/{normalize_name(ctx.project)}", "deterministic", "confidence_boost_operational_override")
 
+    if no_clear_action_required and informational_signal and operational_memory_signal:
+        if ctx.operational_class == "CUSTOMER" and ctx.customer_or_org:
+            return RoutingDecision("MOVE", f"AI Sorted/Customers/{normalize_name(ctx.customer_or_org)}", "deterministic", "informational_operational_override")
+        if ctx.operational_class == "PROJECT" and ctx.project:
+            return RoutingDecision("MOVE", f"AI Sorted/Projects/{normalize_name(ctx.project)}", "deterministic", "informational_operational_override")
+
     if low_confidence and not (informational_signal and operational_memory_signal):
         return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", "low_confidence_non_action")
 
@@ -117,7 +127,9 @@ def determine_routing(
         return RoutingDecision("MOVE", "AI Sorted/Finance", "deterministic", "finance")
     if ctx.operational_class in {"NEWSLETTER", "AUTOMATION", "SALES_SPAM"} and ctx.confidence >= 0.9:
         return RoutingDecision("MOVE", "AI Sorted/Delete", "deterministic", "low_value_high_confidence")
-    reason = "fallback_needs_review:insufficient_signals"
+    reason = "needs_review:insufficient_affinity_or_malformed_signals"
     if operational_memory_signal:
-        reason = "needs_review:operational_memory_insufficient_no_customer_or_project_affinity"
+        reason = "needs_review:operational_memory_insufficient;override_not_triggered_due_to_missing_customer_or_project"
+    if low_confidence and not operational_memory_signal:
+        reason = "needs_review:extremely_low_confidence_no_affinity"
     return RoutingDecision("MOVE", "AI Sorted/Needs Review", "deterministic", reason)
